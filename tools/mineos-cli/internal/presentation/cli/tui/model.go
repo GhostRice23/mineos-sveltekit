@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/freemancraft/mineos-sveltekit/tools/mineos-cli/internal/application/usecases"
 	"github.com/freemancraft/mineos-sveltekit/tools/mineos-cli/internal/domain/config"
@@ -108,6 +109,10 @@ type TuiModel struct {
 	PerfErrs   <-chan error
 	PerfCancel context.CancelFunc
 	PerfServer string
+	// PerfHistory backs the sparklines: seeded from the API's stored history so
+	// the panel opens with context instead of blank, then extended with each
+	// live sample. Oldest first, capped at MaxPerfHistory.
+	PerfHistory []api.PerfSample
 
 	LogScroll      int    // Scroll offset for logs view
 	LogSearchQuery string // Search query for logs
@@ -125,6 +130,12 @@ type TuiModel struct {
 	// table can say "none yet" instead of "loading".
 	ServersLoaded bool
 
+	// FirstLoadDone is set once the initial config load has answered, either
+	// way. It bounds the startup spinner: an API that never comes up must not
+	// leave it spinning (and re-rendering) forever — the servers table reports
+	// that state instead.
+	FirstLoadDone bool
+
 	// Navigation
 	NavItems  []NavItem // Full navigation menu
 	NavIndex  int       // Currently selected nav item
@@ -141,6 +152,10 @@ type TuiModel struct {
 	Input    textinput.Model
 	Quitting bool
 
+	// Spinner animates while something is in flight. Loading feedback used to
+	// be static text, so a slow API and a hung one looked the same.
+	Spinner spinner.Model
+
 	// Confirmation dialog state
 	ConfirmAction  *MenuItem
 	ConfirmMessage string
@@ -154,6 +169,9 @@ type TuiModel struct {
 	StreamingOutput  <-chan string
 	StreamingRunning bool
 	StreamingLabel   string
+	// StreamingEffect is carried from the action to its completion so the
+	// container-state update does not have to guess from the label.
+	StreamingEffect StackEffect
 
 	// Retry state for error recovery
 	RetryCount int
@@ -162,10 +180,38 @@ type TuiModel struct {
 	ContainersStopped bool // True when user intentionally stopped containers
 }
 
+// MenuKind classifies what selecting a menu item does, so the handler does not
+// have to infer it from argv. `Args[0] == "console"` also panicked on an item
+// with no args at all.
+type MenuKind int
+
+const (
+	// MenuKindCommand runs `mineos <Args...>`.
+	MenuKindCommand MenuKind = iota
+	// MenuKindConsole opens the console prompt instead of running anything.
+	MenuKindConsole
+)
+
+// StackEffect is what an action does to the containers.
+//
+// Container state used to be inferred from the label text
+// (strings.Contains(label, "Stop")), which quietly tied behaviour to wording:
+// renaming a menu entry, or translating it, would silently stop the TUI
+// noticing that the stack went down.
+type StackEffect int
+
+const (
+	StackEffectNone StackEffect = iota
+	StackEffectStops
+	StackEffectStarts
+)
+
 // MenuItem represents an item in the command menu
 type MenuItem struct {
 	Label       string
 	Args        []string
+	Kind        MenuKind
+	Effect      StackEffect
 	Destructive bool // If true, requires confirmation
 	Interactive bool // If true, requires user input (use tea.ExecProcess)
 	Streaming   bool // If true, stream output in real-time (for long-running commands)
@@ -268,6 +314,7 @@ type InteractiveFinishedMsg struct {
 type StreamingStartedMsg struct {
 	Output <-chan string
 	Label  string
+	Effect StackEffect
 }
 
 // StreamingOutputMsg is sent for each line of streaming command output
@@ -277,8 +324,9 @@ type StreamingOutputMsg struct {
 
 // StreamingFinishedMsg is sent when a streaming command completes
 type StreamingFinishedMsg struct {
-	Label string
-	Err   error
+	Label  string
+	Effect StackEffect
+	Err    error
 }
 
 // SettingsToggledMsg is sent when a setting is toggled in the TUI
@@ -307,6 +355,15 @@ type PerfStreamStartedMsg struct {
 
 // PerfSampleMsg carries one live performance sample
 type PerfSampleMsg struct{ Sample api.PerfSample }
+
+// PerfHistoryMsg carries the stored history that seeds the sparklines. Server
+// is checked on arrival so a slow response for a previously selected server
+// cannot land in the panel of the one now on screen.
+type PerfHistoryMsg struct {
+	Server  string
+	Samples []api.PerfSample
+	Err     error
+}
 
 // PerfErrorMsg signals the perf stream errored or ended
 type PerfErrorMsg struct{ Err error }

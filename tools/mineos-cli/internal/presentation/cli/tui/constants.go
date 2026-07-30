@@ -65,6 +65,21 @@ const (
 	ScannerMaxBuffer    = 1024 * 1024 // 1MB
 )
 
+// Performance history / sparkline constants
+const (
+	// PerfHistoryMinutes is the window requested when the metrics panel opens.
+	// The API clamps to 5..1440.
+	PerfHistoryMinutes = 60
+	// MaxPerfHistory bounds the retained samples. At the stream's 2s cadence
+	// this is a bit over half an hour of live data on top of the seed.
+	MaxPerfHistory = 1200
+	// SparklineWidth is how many columns a sparkline is drawn in.
+	SparklineWidth = 24
+	// LowTpsThreshold mirrors the server-side low-TPS alert in
+	// PerformanceService, so the CLI highlights exactly what the API warns on.
+	LowTpsThreshold = 18.0
+)
+
 // Timeout constants
 const (
 	HealthPollInterval = 10 * time.Second // Re-check API when unhealthy

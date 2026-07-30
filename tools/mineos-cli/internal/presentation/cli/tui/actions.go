@@ -51,7 +51,7 @@ func (m TuiModel) ExecMenuItem(item MenuItem) tea.Cmd {
 
 	// Streaming commands show output in real-time (for long-running docker operations)
 	if item.Streaming {
-		return m.StartStreamingCmd(exe, args, item.Label)
+		return m.StartStreamingCmd(exe, args, item.Label, item.Effect)
 	}
 
 	// Non-interactive commands capture output for display in TUI
@@ -71,7 +71,7 @@ func (m TuiModel) ExecMenuItem(item MenuItem) tea.Cmd {
 }
 
 // StartStreamingCmd starts a command that streams output without requiring stdin
-func (m TuiModel) StartStreamingCmd(exe string, args []string, label string) tea.Cmd {
+func (m TuiModel) StartStreamingCmd(exe string, args []string, label string, effect StackEffect) tea.Cmd {
 	return func() tea.Msg {
 		cmd := exec.Command(exe, args...)
 
@@ -81,6 +81,7 @@ func (m TuiModel) StartStreamingCmd(exe string, args []string, label string) tea
 			return StreamingStartedMsg{
 				Output: makeErrorChan("Failed to create pipe: " + err.Error()),
 				Label:  label,
+				Effect: effect,
 			}
 		}
 
@@ -92,6 +93,7 @@ func (m TuiModel) StartStreamingCmd(exe string, args []string, label string) tea
 			return StreamingStartedMsg{
 				Output: makeErrorChan("Failed to start: " + err.Error()),
 				Label:  label,
+				Effect: effect,
 			}
 		}
 
@@ -136,6 +138,7 @@ func (m TuiModel) StartStreamingCmd(exe string, args []string, label string) tea
 		return StreamingStartedMsg{
 			Output: outputChan,
 			Label:  label,
+			Effect: effect,
 		}
 	}
 }

@@ -298,7 +298,7 @@ func (m TuiModel) navSelect() (tea.Model, tea.Cmd) {
 		}
 
 		// Handle special actions
-		if item.Action.Args[0] == "console" {
+		if item.Action.Kind == MenuKindConsole {
 			if m.SelectedServer() == "" {
 				m.ErrMsg = "Select a server first (go to Servers view)"
 				return m, nil
@@ -335,7 +335,7 @@ func (m TuiModel) executeServerAction() (tea.Model, tea.Cmd) {
 	serverName := m.SelectedServer()
 
 	// Handle back action
-	if action.Action == "back" {
+	if action.Action == ServerActionBack {
 		m.ServerActions = false
 		m.ActionIndex = 0
 		m.stopPerfStream()
@@ -343,7 +343,7 @@ func (m TuiModel) executeServerAction() (tea.Model, tea.Cmd) {
 	}
 
 	// Handle console command
-	if action.Action == "console" {
+	if action.Action == ServerActionConsole {
 		m.Mode = ModeCommand
 		m.Input.SetValue("")
 		m.Input.Focus()
@@ -354,7 +354,7 @@ func (m TuiModel) executeServerAction() (tea.Model, tea.Cmd) {
 	if action.Destructive {
 		menuItem := &MenuItem{
 			Label:       action.Label,
-			Args:        []string{"servers", serverName, action.Action},
+			Args:        []string{"servers", serverName, string(action.Action)},
 			Destructive: true,
 		}
 		m.ConfirmAction = menuItem
@@ -371,7 +371,7 @@ func (m TuiModel) executeServerAction() (tea.Model, tea.Cmd) {
 
 	menuItem := MenuItem{
 		Label: action.Label,
-		Args:  []string{"servers", serverName, action.Action},
+		Args:  []string{"servers", serverName, string(action.Action)},
 	}
 	return m, m.ExecMenuItem(menuItem)
 }

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/freemancraft/mineos-sveltekit/tools/mineos-cli/internal/application/usecases"
@@ -23,6 +24,10 @@ func NewTuiModel(loadConfig *usecases.LoadConfigUseCase, ctx context.Context, ve
 
 	navItems := BuildNavItems()
 
+	spin := spinner.New()
+	spin.Spinner = spinner.Dot
+	spin.Style = StyleSubtle
+
 	return TuiModel{
 		LoadConfig:    loadConfig,
 		Ctx:           ctx,
@@ -34,6 +39,7 @@ func NewTuiModel(loadConfig *usecases.LoadConfigUseCase, ctx context.Context, ve
 		Mode:          ModeNormal,
 		CurrentView:   ViewDashboard,
 		Input:         input,
+		Spinner:       spin,
 		NavItems:      navItems,
 		NavIndex:      FirstSelectableIndex(navItems),
 	}
@@ -66,7 +72,7 @@ func RunTui(ctx context.Context, loadConfig *usecases.LoadConfigUseCase, version
 // Init initializes the TUI model
 func (m TuiModel) Init() tea.Cmd {
 	// scheduleHealthPoll arms the single, self-rescheduling refresh loop.
-	return tea.Batch(m.LoadConfigCmd(), m.LoadComposeCmd(), scheduleHealthPoll())
+	return tea.Batch(m.LoadConfigCmd(), m.LoadComposeCmd(), scheduleHealthPoll(), m.Spinner.Tick)
 }
 
 // Update handles all incoming messages.
@@ -90,6 +96,7 @@ func (m TuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	prevStatus, prevErr := m.StatusMsg, m.ErrMsg
+	wasBusy := m.Busy()
 
 	model, cmd := m.dispatch(msg)
 	next, ok := model.(TuiModel)
@@ -98,6 +105,11 @@ func (m TuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	cmds := []tea.Cmd{cmd}
+	// Re-arm the spinner whenever work starts. The tick loop stops itself while
+	// idle, so it has to be restarted on the transition rather than run forever.
+	if next.Busy() && !wasBusy {
+		cmds = append(cmds, next.Spinner.Tick)
+	}
 	if next.StatusMsg != prevStatus && next.StatusMsg != "" {
 		next.StatusSeq++
 		cmds = append(cmds, expireNotice(StatusMsgTTL, ClearStatusMsg{Seq: next.StatusSeq}))
@@ -113,9 +125,28 @@ func expireNotice(after time.Duration, msg tea.Msg) tea.Cmd {
 	return tea.Tick(after, func(time.Time) tea.Msg { return msg })
 }
 
+// Busy reports whether something the user is waiting on is in flight.
+//
+// It drives the spinner, and deliberately excludes "the API is down": that is
+// a steady state the servers table reports in words, not something a spinner
+// should animate (and re-render ten times a second) forever.
+func (m TuiModel) Busy() bool {
+	return m.StreamingRunning || m.InteractiveRunning || !m.FirstLoadDone
+}
+
 // dispatch routes a message to its handler.
 func (m TuiModel) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case spinner.TickMsg:
+		// Keep ticking only while something is actually in flight, so an idle
+		// TUI is not re-rendering several times a second for no reason.
+		if !m.Busy() {
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.Spinner, cmd = m.Spinner.Update(msg)
+		return m, cmd
+
 	case tea.KeyMsg:
 		if m.Mode == ModeCommand {
 			return m.HandleCommandInput(msg)
@@ -264,11 +295,22 @@ func (m TuiModel) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.PerfErrs = msg.Errs
 		m.PerfCancel = msg.Cancel
 		m.PerfSample = nil
-		return m, m.ListenPerfCmd()
+		m.PerfHistory = nil
+		// Seed the sparklines from stored history in parallel with the stream.
+		return m, tea.Batch(m.ListenPerfCmd(), m.LoadPerfHistoryCmd(msg.Server))
+
+	case PerfHistoryMsg:
+		// Ignore a late response for a server the user has already left.
+		if msg.Err != nil || msg.Server != m.PerfServer {
+			return m, nil
+		}
+		m.PerfHistory = appendPerfSamples(msg.Samples, m.PerfHistory)
+		return m, nil
 
 	case PerfSampleMsg:
 		s := msg.Sample
 		m.PerfSample = &s
+		m.PerfHistory = appendPerfSamples(m.PerfHistory, []api.PerfSample{s})
 		return m, m.ListenPerfCmd()
 
 	case PerfErrorMsg:
@@ -363,9 +405,41 @@ func (m *TuiModel) stopPerfStream() {
 	m.PerfErrs = nil
 	m.PerfSample = nil
 	m.PerfServer = ""
+	m.PerfHistory = nil
+}
+
+// LoadPerfHistoryCmd fetches the stored performance history for a server.
+func (m TuiModel) LoadPerfHistoryCmd(server string) tea.Cmd {
+	client := m.Client
+	if client == nil || server == "" {
+		return nil
+	}
+	ctx := m.Ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return func() tea.Msg {
+		samples, err := client.PerformanceHistory(ctx, server, PerfHistoryMinutes)
+		return PerfHistoryMsg{Server: server, Samples: samples, Err: err}
+	}
+}
+
+// appendPerfSamples concatenates two oldest-first series and trims the result
+// to MaxPerfHistory, dropping from the front so the newest data survives.
+func appendPerfSamples(older, newer []api.PerfSample) []api.PerfSample {
+	combined := make([]api.PerfSample, 0, len(older)+len(newer))
+	combined = append(combined, older...)
+	combined = append(combined, newer...)
+	if len(combined) > MaxPerfHistory {
+		combined = combined[len(combined)-MaxPerfHistory:]
+	}
+	return combined
 }
 
 func (m TuiModel) handleConfigLoaded(msg ConfigLoadedMsg) (tea.Model, tea.Cmd) {
+	// The startup spinner stops once the API has answered either way.
+	m.FirstLoadDone = true
+
 	if msg.Err != nil {
 		m.ErrMsg = msg.Err.Error()
 		// Retry logic with backoff
@@ -779,6 +853,7 @@ func (m TuiModel) handleStreamingStarted(msg StreamingStartedMsg) (tea.Model, te
 	m.StreamingOutput = msg.Output
 	m.StreamingRunning = true
 	m.StreamingLabel = msg.Label
+	m.StreamingEffect = msg.Effect
 
 	// Switch to output view
 	m.PreviousView = m.CurrentView
@@ -804,10 +879,9 @@ func (m TuiModel) handleStreamingFinished(msg StreamingFinishedMsg) (tea.Model, 
 	m.StreamingRunning = false
 	m.StreamingOutput = nil
 
-	// Detect if containers were intentionally stopped
-	isStopAction := strings.Contains(msg.Label, "Stop") || strings.Contains(msg.Label, "Remove")
-	isStartAction := strings.Contains(msg.Label, "Start") || strings.Contains(msg.Label, "Restart")
-
+	// The action declares what it does to the containers. This used to be read
+	// out of the label text, so renaming (or translating) a menu entry silently
+	// stopped the TUI noticing the stack had gone down.
 	if msg.Err != nil {
 		m.OutputLines = append(m.OutputLines, "", "Error: "+msg.Err.Error())
 		m.ErrMsg = msg.Err.Error()
@@ -817,11 +891,13 @@ func (m TuiModel) handleStreamingFinished(msg StreamingFinishedMsg) (tea.Model, 
 		m.ErrMsg = ""
 
 		// Track container state
-		if isStopAction {
+		switch msg.Effect {
+		case StackEffectStops:
 			m.ContainersStopped = true
 			m.ConfigReady = false // API is no longer available
 			m.Servers = nil
-		} else if isStartAction {
+			m.ServersLoaded = false
+		case StackEffectStarts:
 			m.ContainersStopped = false
 		}
 	}
@@ -839,6 +915,7 @@ func (m TuiModel) handleStreamingFinished(msg StreamingFinishedMsg) (tea.Model, 
 func (m TuiModel) ListenStreamingCmd() tea.Cmd {
 	outputChan := m.StreamingOutput
 	label := m.StreamingLabel
+	effect := m.StreamingEffect
 
 	if outputChan == nil {
 		return nil
@@ -848,7 +925,7 @@ func (m TuiModel) ListenStreamingCmd() tea.Cmd {
 		line, ok := <-outputChan
 		if !ok {
 			// Channel closed - command finished
-			return StreamingFinishedMsg{Label: label}
+			return StreamingFinishedMsg{Label: label, Effect: effect}
 		}
 		return StreamingOutputMsg{Line: line}
 	}
