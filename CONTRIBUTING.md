@@ -13,13 +13,20 @@ skim them before opening a PR.
 
 ## Before you open the PR
 
-- **Run the backend tests** — CI does *not* run them for you:
+CI runs all three suites, but running them locally first is much faster than
+waiting for a red build:
+
+- **Backend:**
   ```
   dotnet test apps/MineOS.Tests/MineOS.Tests.csproj
   ```
-- **Run the frontend check** if you touched `apps/web`:
+- **Frontend**, if you touched `apps/web`:
   ```
-  cd apps/web && npm run check
+  cd apps/web && npm run check && npm run test:unit
+  ```
+- **CLI**, if you touched `tools/mineos-cli`:
+  ```
+  cd tools/mineos-cli && go vet ./... && go test ./... -race
   ```
 - Keep the change within the **Clean Architecture** boundaries (see `AGENTS.md`).
   The architecture tests will fail the build if an inner layer gains an outward or
