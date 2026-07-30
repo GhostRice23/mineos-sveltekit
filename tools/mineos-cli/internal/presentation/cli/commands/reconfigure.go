@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/freemancraft/mineos-sveltekit/tools/mineos-cli/internal/application/usecases"
+	"github.com/freemancraft/mineos-sveltekit/tools/mineos-cli/internal/infrastructure/env"
 )
 
 func NewReconfigureCommand(loadConfig *usecases.LoadConfigUseCase) *cobra.Command {
@@ -185,82 +186,50 @@ func runReconfigure(cmd *cobra.Command, loadConfig *usecases.LoadConfigUseCase) 
 		return err
 	}
 
-	if err := setEnvFileValue(envPath, "Auth__SeedUsername", adminUser); err != nil {
-		return err
-	}
+	// Collected and written in a single atomic pass: reconfigure used to rewrite
+	// the whole .env once per key, so an error or a crash partway through left
+	// the install half-configured.
+	updates := []env.KeyValue{{Key: "Auth__SeedUsername", Value: adminUser}}
+
 	passwordChanged := false
 	if strings.TrimSpace(adminPass) != "" {
-		if err := setEnvFileValue(envPath, "Auth__SeedPassword", adminPass); err != nil {
-			return err
-		}
+		updates = append(updates, env.KeyValue{Key: "Auth__SeedPassword", Value: adminPass})
 		if adminPass != currentPass {
 			passwordChanged = true
-			if err := setEnvFileValue(envPath, "Auth__ForcePasswordReset", "true"); err != nil {
-				return err
-			}
+			updates = append(updates, env.KeyValue{Key: "Auth__ForcePasswordReset", Value: "true"})
 		}
 	}
 	if strings.TrimSpace(managementKey) != "" {
-		if err := setEnvFileValue(envPath, "MINEOS_API_KEY", managementKey); err != nil {
-			return err
-		}
+		updates = append(updates, env.KeyValue{Key: "MINEOS_API_KEY", Value: managementKey})
 	}
-	if err := setEnvFileValue(envPath, "HOST_BASE_DIRECTORY", hostDir); err != nil {
-		return err
-	}
-	if err := setEnvFileValue(envPath, "Data__Directory", dataDir); err != nil {
-		return err
-	}
-	if err := setEnvFileValue(envPath, "API_PORT", strconv.Itoa(apiPort)); err != nil {
-		return err
-	}
-	if err := setEnvFileValue(envPath, "WEB_PORT", strconv.Itoa(webPort)); err != nil {
-		return err
-	}
-	if err := setEnvFileValue(envPath, "WEB_ORIGIN_PROD", webOrigin); err != nil {
-		return err
-	}
-	if err := setEnvFileValue(envPath, "PUBLIC_API_BASE_URL", webOrigin); err != nil {
-		return err
-	}
-	if err := setEnvFileValue(envPath, "ORIGIN", webOrigin); err != nil {
-		return err
-	}
-	if err := setEnvFileValue(envPath, "CADDY_SITE", caddySite); err != nil {
-		return err
-	}
-	if err := setEnvFileValue(envPath, "PUBLIC_MINECRAFT_HOST", minecraftHost); err != nil {
-		return err
-	}
-	if err := setEnvFileValue(envPath, "BODY_SIZE_LIMIT", bodySizeLimit); err != nil {
-		return err
-	}
-	if err := setEnvFileValue(envPath, "MINEOS_SHUTDOWN_TIMEOUT", strconv.Itoa(shutdownTimeout)); err != nil {
-		return err
-	}
-	if err := setEnvFileValue(envPath, "MINEOS_NETWORK_MODE", networkMode); err != nil {
-		return err
-	}
-	if err := setEnvFileValue(envPath, "MINEOS_BUILD_FROM_SOURCE", strconv.FormatBool(buildFromSource)); err != nil {
-		return err
-	}
-	if err := setEnvFileValue(envPath, "MINEOS_IMAGE_TAG", imageTag); err != nil {
-		return err
-	}
+	updates = append(updates,
+		env.KeyValue{Key: "HOST_BASE_DIRECTORY", Value: hostDir},
+		env.KeyValue{Key: "Data__Directory", Value: dataDir},
+		env.KeyValue{Key: "API_PORT", Value: strconv.Itoa(apiPort)},
+		env.KeyValue{Key: "WEB_PORT", Value: strconv.Itoa(webPort)},
+		env.KeyValue{Key: "WEB_ORIGIN_PROD", Value: webOrigin},
+		env.KeyValue{Key: "PUBLIC_API_BASE_URL", Value: webOrigin},
+		env.KeyValue{Key: "ORIGIN", Value: webOrigin},
+		env.KeyValue{Key: "CADDY_SITE", Value: caddySite},
+		env.KeyValue{Key: "PUBLIC_MINECRAFT_HOST", Value: minecraftHost},
+		env.KeyValue{Key: "BODY_SIZE_LIMIT", Value: bodySizeLimit},
+		env.KeyValue{Key: "MINEOS_SHUTDOWN_TIMEOUT", Value: strconv.Itoa(shutdownTimeout)},
+		env.KeyValue{Key: "MINEOS_NETWORK_MODE", Value: networkMode},
+		env.KeyValue{Key: "MINEOS_BUILD_FROM_SOURCE", Value: strconv.FormatBool(buildFromSource)},
+		env.KeyValue{Key: "MINEOS_IMAGE_TAG", Value: imageTag},
+	)
 	if strings.TrimSpace(curseforgeKey) != "" {
-		if err := setEnvFileValue(envPath, "CurseForge__ApiKey", curseforgeKey); err != nil {
-			return err
-		}
+		updates = append(updates, env.KeyValue{Key: "CurseForge__ApiKey", Value: curseforgeKey})
 	}
 	if strings.TrimSpace(discordWebhook) != "" {
-		if err := setEnvFileValue(envPath, "Discord__WebhookUrl", discordWebhook); err != nil {
-			return err
-		}
+		updates = append(updates, env.KeyValue{Key: "Discord__WebhookUrl", Value: discordWebhook})
 	}
-	if err := setEnvFileValue(envPath, "MINEOS_TELEMETRY_ENABLED", strconv.FormatBool(telemetryEnabled)); err != nil {
-		return err
-	}
-	if err := setEnvFileValue(envPath, "MINEOS_CLI_PRERELEASE_UPDATES", strconv.FormatBool(prereleaseEnabled)); err != nil {
+	updates = append(updates,
+		env.KeyValue{Key: "MINEOS_TELEMETRY_ENABLED", Value: strconv.FormatBool(telemetryEnabled)},
+		env.KeyValue{Key: "MINEOS_CLI_PRERELEASE_UPDATES", Value: strconv.FormatBool(prereleaseEnabled)},
+	)
+
+	if err := envRepo(envPath).SetAll(updates); err != nil {
 		return err
 	}
 

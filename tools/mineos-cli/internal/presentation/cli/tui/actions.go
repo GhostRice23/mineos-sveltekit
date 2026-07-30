@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/freemancraft/mineos-sveltekit/tools/mineos-cli/internal/infrastructure/env"
 )
 
 func (m TuiModel) ConsoleCommandCmd(command string) tea.Cmd {
@@ -191,35 +193,13 @@ func (m TuiModel) ToggleEnvSettingCmd(envKey, currentValue string) tea.Cmd {
 	}
 }
 
-// writeEnvValue sets a key=value in the .env file
+// writeEnvValue sets a key=value in the .env file.
+//
+// Delegates to the one .env writer rather than re-implementing it; this used to
+// be a second copy of commands.setEnvFileValue that could disagree with it
+// about quoting and permissions.
 func writeEnvValue(path, key, value string) error {
-	if path == "" {
-		path = ".env"
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return os.WriteFile(path, []byte(key+"="+value+"\n"), 0o600)
-		}
-		return err
-	}
-	lines := strings.Split(string(data), "\n")
-	found := false
-	prefix := key + "="
-	for i, line := range lines {
-		if strings.HasPrefix(strings.TrimSpace(line), prefix) {
-			lines[i] = prefix + value
-			found = true
-		}
-	}
-	if !found {
-		lines = append(lines, prefix+value)
-	}
-	output := strings.Join(lines, "\n")
-	if !strings.HasSuffix(output, "\n") {
-		output += "\n"
-	}
-	return os.WriteFile(path, []byte(output), 0o600)
+	return env.NewDotenvRepository(env.ResolvePath(path)).Set(key, value)
 }
 
 func (m TuiModel) SelectedServer() string {
