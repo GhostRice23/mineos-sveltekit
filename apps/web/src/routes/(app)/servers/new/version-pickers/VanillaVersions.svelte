@@ -26,12 +26,6 @@
 					return p.group === 'paper';
 				case 'spigot':
 					return p.group === 'spigot' || (p.group === 'vanilla' && p.type === 'release');
-				case 'craftbukkit':
-					return (
-						p.group === 'craftbukkit' ||
-						p.group === 'bukkit' ||
-						(p.group === 'vanilla' && p.type === 'release')
-					);
 				default:
 					return false;
 			}

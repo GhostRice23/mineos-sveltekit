@@ -75,10 +75,13 @@
 				case 'vanilla': return p.group === 'vanilla';
 				case 'paper': return p.group === 'paper';
 				case 'spigot': return p.group === 'spigot' || (p.group === 'vanilla' && p.type === 'release');
-					case 'forge': return p.group === 'forge';
+				case 'forge': return p.group === 'forge';
+				case 'neoforge': return p.group === 'neoforge';
 				case 'fabric': return p.group === 'fabric';
+				case 'quilt': return p.group === 'quilt';
 				case 'velocity': return p.group === 'velocity';
-				case 'bedrock': return p.group === 'bedrock-server' || p.group === 'bedrock-server-preview';
+				// No 'bedrock' case: Bedrock is deliberately absent from
+				// ServerType — selectType() refuses to convert to or from it.
 				default: return false;
 			}
 		});
@@ -138,11 +141,9 @@
 	}
 
 	async function selectType(type: ServerType) {
-		if (type === 'bedrock' && currentServerType !== 'bedrock') {
-			error = 'Cannot switch a Java server to Bedrock. Create a new Bedrock server instead.';
-			return;
-		}
-		if (currentServerType === 'bedrock' && type !== 'bedrock') {
+		// Bedrock is not a ServerType, so the only reachable direction is
+		// Bedrock -> Java; converting *to* Bedrock is impossible by construction.
+		if (currentServerType === 'bedrock') {
 			error = 'Cannot switch a Bedrock server to Java. Create a new Java server instead.';
 			return;
 		}
