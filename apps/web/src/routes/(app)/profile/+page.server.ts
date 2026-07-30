@@ -1,4 +1,5 @@
 import { fail } from '@sveltejs/kit';
+import { secureCookieFlag } from '$lib/server/requestProtocol';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ fetch }) => {
@@ -50,7 +51,7 @@ export const actions = {
 		}
 
 		const updated = await response.json();
-		const secure = url.protocol === 'https:';
+		const secure = secureCookieFlag(request, url);
 		cookies.set('auth_user', JSON.stringify({ username: updated.username, role: updated.role }), {
 			httpOnly: false,
 			secure,

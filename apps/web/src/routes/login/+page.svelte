@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
-	import type { ActionData } from './$types';
+	import type { ActionData, PageData } from './$types';
 
-	let { form }: { form: ActionData } = $props();
+	let { form, data }: { form: ActionData; data: PageData } = $props();
 	let loading = $state(false);
 </script>
 
@@ -31,6 +31,10 @@
 			</div>
 			<p class="subtitle">Sign in to manage your servers</p>
 		</div>
+
+		{#if data.notice && !form?.error}
+			<div class="notice">{data.notice}</div>
+		{/if}
 
 		<form
 			method="POST"
@@ -205,6 +209,16 @@
 	button:disabled {
 		opacity: 0.6;
 		cursor: not-allowed;
+	}
+
+	.notice {
+		background: rgba(111, 181, 255, 0.1);
+		border: 1px solid rgba(111, 181, 255, 0.3);
+		border-radius: 8px;
+		padding: 12px 16px;
+		margin-bottom: 20px;
+		color: #b6d5ff;
+		font-size: 14px;
 	}
 
 	.error {
