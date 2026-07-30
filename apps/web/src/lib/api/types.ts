@@ -107,6 +107,13 @@ export type VelocityConfig = {
 	forcedHosts: Record<string, string[]>;
 };
 
+/** A Java runtime discovered on the API host (GET /host/java-runtimes). */
+export type JavaRuntime = {
+	path: string;
+	majorVersion: number | null;
+	label: string;
+};
+
 export type JavaConfig = {
 	javaBinary: string;
 	javaXmx: number;

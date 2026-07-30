@@ -1,5 +1,6 @@
 import type { PageServerLoad, Actions } from './$types';
 import { getHostProfiles, getServerConfig, updateServerConfig } from '$lib/api/client';
+import type { JavaRuntime } from '$lib/api/types';
 import { fail } from '@sveltejs/kit';
 
 export const load: PageServerLoad = async ({ params, fetch }) => {
@@ -42,10 +43,25 @@ export const load: PageServerLoad = async ({ params, fetch }) => {
 		forgeArgFiles = [];
 	}
 
+	// Java runtimes actually present in the API container. The picker used to
+	// offer a hardcoded list of guessed paths that did not match what the
+	// launcher probes, so a chosen runtime could simply not exist.
+	let javaRuntimes: JavaRuntime[] = [];
+	try {
+		const runtimeRes = await fetch('/api/host/java-runtimes');
+		if (runtimeRes.ok) {
+			javaRuntimes = await runtimeRes.json();
+		}
+	} catch {
+		// Non-fatal: the field stays free-text.
+		javaRuntimes = [];
+	}
+
 	return {
 		config,
 		profiles,
 		serverName: params.name,
+		javaRuntimes,
 		jarFiles: {
 			data: jarFiles,
 			error: jarFilesError
