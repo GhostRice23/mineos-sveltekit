@@ -17,8 +17,19 @@ public class MineOsWebApplicationFactory : WebApplicationFactory<Program>
     private readonly string _dbName = $"TestDb_{Guid.NewGuid():N}";
     private const string TestSigningKey = "test-signing-key-at-least-32-characters-long!!";
 
+    // ServerService creates server/backup/archive directories for real, under
+    // HostOptions.BaseDirectory. Nothing overrode it, so the tests wrote to the
+    // production default (/var/games/minecraft): they only passed on a machine
+    // where that path happened to exist and be writable, and they shared state
+    // with anything else using it. A per-factory temp directory makes them
+    // hermetic and lets them run anywhere, CI included.
+    private readonly string _baseDirectory =
+        Path.Combine(Path.GetTempPath(), $"mineos-tests-{Guid.NewGuid():N}");
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
+        Directory.CreateDirectory(_baseDirectory);
+
         builder.UseEnvironment("Testing");
 
         builder.ConfigureAppConfiguration((_, config) =>
@@ -33,6 +44,7 @@ public class MineOsWebApplicationFactory : WebApplicationFactory<Program>
                 ["Auth:Jwt:ExpiresMinutes"] = "60",
                 ["ApiKey:StaticKey"] = "dev-static-api-key-change-me",
                 ["ConnectionStrings:Default"] = "DataSource=:memory:",
+                ["Host:BaseDirectory"] = _baseDirectory,
             });
         });
 
@@ -85,5 +97,26 @@ public class MineOsWebApplicationFactory : WebApplicationFactory<Program>
                 };
             });
         });
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        base.Dispose(disposing);
+
+        if (!disposing)
+            return;
+
+        try
+        {
+            if (Directory.Exists(_baseDirectory))
+                Directory.Delete(_baseDirectory, recursive: true);
+        }
+        catch (IOException)
+        {
+            // A leftover temp directory is not worth failing a test run over.
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
     }
 }
