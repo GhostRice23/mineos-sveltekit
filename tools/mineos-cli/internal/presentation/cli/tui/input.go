@@ -9,6 +9,21 @@ import (
 
 // HandleKey processes key input in normal mode
 func (m TuiModel) HandleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// The help overlay swallows every key except the ones that dismiss it, so
+	// nothing happens behind it by accident. Ctrl+C still quits — it must work
+	// from anywhere.
+	if m.Mode == ModeHelp {
+		if msg.Type == tea.KeyCtrlC {
+			m.Quitting = true
+			m.StopLogs()
+			return m, tea.Quit
+		}
+		if msg.Type == tea.KeyEsc || msg.String() == "?" {
+			m.Mode = ModeNormal
+		}
+		return m, nil
+	}
+
 	switch msg.Type {
 	case tea.KeyCtrlC:
 		m.Quitting = true
@@ -42,6 +57,9 @@ func (m TuiModel) HandleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Vim-style navigation
 	switch msg.String() {
+	case "?":
+		m.Mode = ModeHelp
+		return m, nil
 	case "q":
 		m.Quitting = true
 		m.StopLogs()
@@ -58,6 +76,14 @@ func (m TuiModel) HandleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Toggle pre-release updates in settings view
 		if m.CurrentView == ViewSettings && m.ConfigReady {
 			return m, m.ToggleEnvSettingCmd("MINEOS_CLI_PRERELEASE_UPDATES", m.Cfg.PreReleaseUpdates)
+		}
+	case "r":
+		// Reconnect the log stream. Automatic reconnects stop after
+		// MaxLogRetries, so there has to be a way to ask for more.
+		if m.CurrentView == ViewServiceLogs || m.CurrentView == ViewServers {
+			m.resetLogStream()
+			m.ErrMsg = ""
+			return m, m.StartLogStreamCmd()
 		}
 	case "/":
 		// Enter search mode in logs views
@@ -108,7 +134,7 @@ func (m TuiModel) navLeft() (tea.Model, tea.Cmd) {
 					prevIdx = len(sources) - 1
 				}
 				m.LogSource = sources[prevIdx]
-				m.Logs = nil
+				m.resetLogStream()
 				m.LogScroll = 0 // Reset scroll when switching sources
 				return m, m.StartLogStreamCmd()
 			}
@@ -126,7 +152,7 @@ func (m TuiModel) navRight() (tea.Model, tea.Cmd) {
 			if svc == m.LogSource {
 				nextIdx := (i + 1) % len(sources)
 				m.LogSource = sources[nextIdx]
-				m.Logs = nil
+				m.resetLogStream()
 				m.LogScroll = 0 // Reset scroll when switching sources
 				return m, m.StartLogStreamCmd()
 			}
@@ -158,7 +184,7 @@ func (m TuiModel) navUp() (tea.Model, tea.Cmd) {
 		m.Selected--
 		// Always show Minecraft logs for selected server
 		m.MinecraftSource = m.SelectedServer()
-		m.Logs = nil
+		m.resetLogStream()
 		return m, m.StartLogStreamCmd()
 	}
 
@@ -194,7 +220,7 @@ func (m TuiModel) navDown() (tea.Model, tea.Cmd) {
 		m.Selected++
 		// Always show Minecraft logs for selected server
 		m.MinecraftSource = m.SelectedServer()
-		m.Logs = nil
+		m.resetLogStream()
 		return m, m.StartLogStreamCmd()
 	}
 
@@ -256,12 +282,12 @@ func (m TuiModel) navSelect() (tea.Model, tea.Cmd) {
 			// Switch to Minecraft logs for selected server
 			m.LogType = LogTypeMinecraft
 			m.MinecraftSource = m.SelectedServer()
-			m.Logs = nil
+			m.resetLogStream()
 			cmd = m.StartLogStreamCmd()
 		} else if item.View == ViewServiceLogs {
 			// Switch to Docker logs
 			m.LogType = LogTypeDocker
-			m.Logs = nil
+			m.resetLogStream()
 			cmd = m.StartLogStreamCmd()
 		}
 		return m, cmd

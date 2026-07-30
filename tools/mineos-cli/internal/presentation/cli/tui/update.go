@@ -69,8 +69,52 @@ func (m TuiModel) Init() tea.Cmd {
 	return tea.Batch(m.LoadConfigCmd(), m.LoadComposeCmd(), scheduleHealthPoll())
 }
 
-// Update handles all incoming messages
+// Update handles all incoming messages.
+//
+// It wraps the message dispatch so that any handler which sets StatusMsg or
+// ErrMsg automatically gets an expiry armed for it — notices used to stay on
+// the footer forever, so a message about a server you stopped ten minutes ago
+// was still there next to a healthy one.
 func (m TuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case ClearStatusMsg:
+		if msg.Seq == m.StatusSeq {
+			m.StatusMsg = ""
+		}
+		return m, nil
+	case ClearErrorMsg:
+		if msg.Seq == m.ErrSeq {
+			m.ErrMsg = ""
+		}
+		return m, nil
+	}
+
+	prevStatus, prevErr := m.StatusMsg, m.ErrMsg
+
+	model, cmd := m.dispatch(msg)
+	next, ok := model.(TuiModel)
+	if !ok {
+		return model, cmd
+	}
+
+	cmds := []tea.Cmd{cmd}
+	if next.StatusMsg != prevStatus && next.StatusMsg != "" {
+		next.StatusSeq++
+		cmds = append(cmds, expireNotice(StatusMsgTTL, ClearStatusMsg{Seq: next.StatusSeq}))
+	}
+	if next.ErrMsg != prevErr && next.ErrMsg != "" {
+		next.ErrSeq++
+		cmds = append(cmds, expireNotice(ErrorMsgTTL, ClearErrorMsg{Seq: next.ErrSeq}))
+	}
+	return next, tea.Batch(cmds...)
+}
+
+func expireNotice(after time.Duration, msg tea.Msg) tea.Cmd {
+	return tea.Tick(after, func(time.Time) tea.Msg { return msg })
+}
+
+// dispatch routes a message to its handler.
+func (m TuiModel) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		if m.Mode == ModeCommand {
@@ -107,13 +151,18 @@ func (m TuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case LogStreamStartedMsg:
 		return m.handleLogStreamStarted(msg)
 
-	case LogLineMsg:
-		m.AppendLog(msg.Line)
-		// Clear log-related errors on successful log receipt
+	case LogLinesMsg:
+		m.AppendLogs(msg.Lines)
+		// Lines are arriving, so the stream is healthy again: clear log-related
+		// errors and restore the full reconnect budget.
+		m.LogRetries = 0
 		if strings.Contains(m.ErrMsg, "log stream") || strings.Contains(m.ErrMsg, "stream") {
 			m.ErrMsg = ""
 		}
 		return m, m.ListenLogsCmd()
+
+	case LogStreamClosedMsg:
+		return m.handleLogStreamClosed()
 
 	case LogErrorMsg:
 		if msg.Err != nil {
@@ -140,6 +189,11 @@ func (m TuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			// Retry streaming if active and not quitting (with longer delay for connection errors)
 			if m.LogsActive && !m.Quitting && !strings.Contains(errStr, "context canceled") {
+				if m.LogRetries >= MaxLogRetries {
+					m.ErrMsg = logRetriesExhaustedMsg
+					return m, nil
+				}
+				m.LogRetries++
 				// Use longer delay for connection errors to reduce flickering
 				delay := LogRetryDelay
 				if strings.Contains(errStr, "connection refused") || strings.Contains(errStr, "no such host") {
@@ -378,6 +432,7 @@ func (m TuiModel) handleServersLoaded(msg ServersLoadedMsg) (tea.Model, tea.Cmd)
 		m.ConfigReady = true
 	}
 	m.Servers = msg.Servers
+	m.ServersLoaded = true
 	if len(m.Servers) == 0 {
 		m.Selected = 0
 		return m, nil
@@ -483,10 +538,50 @@ func (m TuiModel) handleInteractiveFinished(msg InteractiveFinishedMsg) (tea.Mod
 
 // AppendLog adds a line to the log buffer with size limiting
 func (m *TuiModel) AppendLog(line string) {
-	m.Logs = append(m.Logs, line)
+	m.AppendLogs([]string{line})
+}
+
+// AppendLogs adds a batch of lines to the log buffer, trimming once rather
+// than once per line.
+func (m *TuiModel) AppendLogs(lines []string) {
+	if len(lines) == 0 {
+		return
+	}
+	m.Logs = append(m.Logs, lines...)
 	if len(m.Logs) > MaxLogLines {
 		m.Logs = m.Logs[len(m.Logs)-MaxLogLines:]
 	}
+}
+
+// resetLogStream clears the buffer and restores the reconnect budget. Called
+// when the user changes what they are watching, so a fresh source always gets
+// a full set of retries even if the previous one had exhausted its own.
+func (m *TuiModel) resetLogStream() {
+	m.Logs = nil
+	m.LogRetries = 0
+}
+
+// logRetriesExhaustedMsg is shown once reconnecting has been given up on.
+const logRetriesExhaustedMsg = "log stream unavailable after 3 attempts - press r to retry"
+
+// handleLogStreamClosed reconnects after a clean close, with a delay and a cap.
+//
+// This path used to return LogRetryMsg immediately, so a stream that closed
+// instantly (a stopped container, a server that never starts) span in a tight
+// reconnect loop; MaxLogRetries and LogRetryDelay existed but were never
+// applied here.
+func (m TuiModel) handleLogStreamClosed() (tea.Model, tea.Cmd) {
+	if !m.LogsActive || m.Quitting || m.ContainersStopped {
+		return m, nil
+	}
+	if m.LogRetries >= MaxLogRetries {
+		m.ErrMsg = logRetriesExhaustedMsg
+		return m, nil
+	}
+	m.LogRetries++
+	return m, tea.Tick(LogRetryDelay, func(time.Time) tea.Msg {
+		return LogRetryMsg{}
+	})
 }
 
 // LoadConfigCmd creates a command to load configuration
@@ -619,18 +714,36 @@ func (m TuiModel) ListenLogsCmd() tea.Cmd {
 		select {
 		case line, ok := <-logsChan:
 			if !ok {
-				// Channel closed cleanly - trigger silent retry
-				return LogRetryMsg{}
+				return LogStreamClosedMsg{}
 			}
-			return LogLineMsg{Line: line}
+			return LogLinesMsg{Lines: drainLogLines(logsChan, line)}
 		case err, ok := <-errsChan:
 			if !ok {
-				// Channel closed cleanly - trigger silent retry
-				return LogRetryMsg{}
+				return LogStreamClosedMsg{}
 			}
 			return LogErrorMsg{Err: err}
 		}
 	}
+}
+
+// drainLogLines collects first plus every line already queued behind it,
+// without blocking. A closed channel just ends the batch — the next listen
+// observes the close and reports it.
+func drainLogLines(ch <-chan string, first string) []string {
+	lines := make([]string, 1, LogBatchMax)
+	lines[0] = first
+	for len(lines) < LogBatchMax {
+		select {
+		case line, ok := <-ch:
+			if !ok {
+				return lines
+			}
+			lines = append(lines, line)
+		default:
+			return lines
+		}
+	}
+	return lines
 }
 
 // NormalizeComposeServices normalizes the list of compose services

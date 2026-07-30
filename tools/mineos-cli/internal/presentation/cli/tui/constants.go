@@ -51,6 +51,12 @@ const (
 	DefaultDockerLogTail = 200
 	LogRetryDelay        = 2 * time.Second
 	MaxLogRetries        = 3
+	// LogBatchMax caps how many already-queued log lines are delivered in one
+	// message. Bubble Tea re-renders the whole view per message, so handing it
+	// one line at a time makes a startup burst crawl; batching turns a few
+	// hundred renders into one. The cap keeps a runaway producer from starving
+	// key handling.
+	LogBatchMax = 256
 )
 
 // Streaming constants
@@ -62,6 +68,12 @@ const (
 // Timeout constants
 const (
 	HealthPollInterval = 10 * time.Second // Re-check API when unhealthy
+
+	// How long a transient notice stays on the footer before expiring.
+	// Errors linger longer than confirmations because they are worth reading
+	// twice; both are replaced immediately by a newer notice.
+	StatusMsgTTL = 6 * time.Second
+	ErrorMsgTTL  = 20 * time.Second
 )
 
 // UI layout constants

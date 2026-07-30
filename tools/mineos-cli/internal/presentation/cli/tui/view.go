@@ -58,6 +58,11 @@ func (m TuiModel) View() string {
 		rightLines = []string{"View not implemented"}
 	}
 
+	// Overlay the keybinding reference if active
+	if m.Mode == ModeHelp {
+		rightLines = m.RenderHelpOverlay(rightWidth, contentHeight)
+	}
+
 	// Overlay confirm dialog if active
 	if m.Mode == ModeConfirm {
 		rightLines = m.RenderConfirmDialog(rightWidth, contentHeight)

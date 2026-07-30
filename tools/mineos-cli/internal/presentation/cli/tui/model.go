@@ -31,6 +31,7 @@ const (
 	ModeConfirm
 	ModeInteractive // Running an interactive command inside the TUI
 	ModeSearch      // Searching logs
+	ModeHelp        // Keybinding reference overlay
 )
 
 // LogType represents the type of log being viewed
@@ -96,6 +97,10 @@ type TuiModel struct {
 	LogsChan        <-chan string
 	LogErrsChan     <-chan error
 	LogCancel       context.CancelFunc
+	// LogRetries counts consecutive failed reconnects; reset as soon as a line
+	// arrives. Capped at MaxLogRetries so a stream that will never come back
+	// stops being retried forever.
+	LogRetries int
 
 	// Live per-server performance stream (server-actions view)
 	PerfSample *api.PerfSample
@@ -104,12 +109,21 @@ type TuiModel struct {
 	PerfCancel context.CancelFunc
 	PerfServer string
 
-	LogScroll       int    // Scroll offset for logs view
-	LogSearchQuery  string // Search query for logs
-	LogSearchMode   bool   // Whether in search mode
+	LogScroll      int    // Scroll offset for logs view
+	LogSearchQuery string // Search query for logs
+	LogSearchMode  bool   // Whether in search mode
 
 	StatusMsg string
 	ErrMsg    string
+	// StatusSeq/ErrSeq stamp each notice so its scheduled expiry only fires
+	// while it is still the one on screen — a newer message is never cut short
+	// by an older message's timer.
+	StatusSeq int
+	ErrSeq    int
+
+	// ServersLoaded is true once a server list has come back, so an empty
+	// table can say "none yet" instead of "loading".
+	ServersLoaded bool
 
 	// Navigation
 	NavItems  []NavItem // Full navigation menu
@@ -194,10 +208,16 @@ type LogStreamStartedMsg struct {
 	LogSource string
 }
 
-// LogLineMsg is sent for each log line received
-type LogLineMsg struct {
-	Line string
+// LogLinesMsg carries every log line that was ready at once, so a burst costs
+// one re-render instead of one per line.
+type LogLinesMsg struct {
+	Lines []string
 }
+
+// LogStreamClosedMsg is sent when the log stream ends without an error. It is
+// distinct from LogRetryMsg so the reconnect can be delayed and counted; the
+// two used to be the same message, which reconnected with no delay at all.
+type LogStreamClosedMsg struct{}
 
 // LogErrorMsg is sent when a log streaming error occurs
 type LogErrorMsg struct {
@@ -206,6 +226,13 @@ type LogErrorMsg struct {
 
 // LogRetryMsg is sent to trigger log stream retry
 type LogRetryMsg struct{}
+
+// ClearStatusMsg / ClearErrorMsg expire a notice after its TTL. Seq identifies
+// which notice the timer was armed for; a mismatch means it has been replaced
+// and the timer is ignored.
+type ClearStatusMsg struct{ Seq int }
+
+type ClearErrorMsg struct{ Seq int }
 
 // ActionResultMsg is sent when an action completes
 type ActionResultMsg struct {

@@ -41,6 +41,44 @@ func (m TuiModel) RenderServersMain(width, height int) []string {
 	return lines
 }
 
+// ServersTableState is why the server table has no rows. "No servers found."
+// used to be shown for all three, so a still-loading TUI and an unreachable API
+// looked exactly like a working install with nothing on it.
+type ServersTableState int
+
+const (
+	// ServersStateLoading — the first list request has not come back yet.
+	ServersStateLoading ServersTableState = iota
+	// ServersStateUnavailable — the API could not be reached.
+	ServersStateUnavailable
+	// ServersStateEmpty — the API answered, with no servers.
+	ServersStateEmpty
+)
+
+// ServersTableState reports which of the three empty states applies.
+func (m TuiModel) ServersTableState() ServersTableState {
+	switch {
+	case m.ServersLoaded:
+		return ServersStateEmpty
+	case m.ConfigReady && !m.Healthy:
+		return ServersStateUnavailable
+	default:
+		return ServersStateLoading
+	}
+}
+
+// ServersPlaceholder is the line shown in place of the table rows.
+func ServersPlaceholder(state ServersTableState) string {
+	switch state {
+	case ServersStateUnavailable:
+		return "Can't reach the MineOS API - retrying..."
+	case ServersStateEmpty:
+		return "No servers yet. Create one in the web UI."
+	default:
+		return "Loading servers..."
+	}
+}
+
 func (m TuiModel) RenderServersTable(width, height int) []string {
 	lines := make([]string, 0, height)
 
@@ -54,7 +92,7 @@ func (m TuiModel) RenderServersTable(width, height int) []string {
 	}
 
 	if len(m.Servers) == 0 {
-		lines = append(lines, TrimToWidth(StyleSubtle.Render(" No servers found."), width))
+		lines = append(lines, TrimToWidth(StyleSubtle.Render(" "+ServersPlaceholder(m.ServersTableState())), width))
 		return PadLines(lines, height)
 	}
 
