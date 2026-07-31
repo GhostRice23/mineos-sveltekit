@@ -9,9 +9,9 @@ import (
 // and panic strings.Repeat. View must degrade to a resize notice instead.
 func TestView_SmallTerminal_DoesNotPanic(t *testing.T) {
 	sizes := []struct{ w, h int }{
-		{0, 0},   // pre-size: existing "Loading..." path
-		{1, 1},   // absurdly small
-		{15, 4},  // narrower than SidebarWidth — the historical panic case
+		{0, 0},  // pre-size: existing "Loading..." path
+		{1, 1},  // absurdly small
+		{15, 4}, // narrower than SidebarWidth — the historical panic case
 		{MinTerminalWidth - 1, MinTerminalHeight - 1}, // just under the threshold
 	}
 	for _, s := range sizes {

@@ -26,7 +26,11 @@ const hostCandidates = (hostname: string): Array<Pick<CookieOptions, 'domain'>> 
 };
 
 export const clearAuthCookies = (cookies: Cookies, url: URL) => {
-	const secureOptions = url.protocol === 'https:' ? [true, false] : [false];
+	// Always clear both variants. url.protocol reflects ORIGIN rather than the
+	// browser's scheme (see requestProtocol.ts), so gating on it used to leave a
+	// `Secure` cookie behind and the user apparently still signed in. Emitting
+	// an expiry the browser ignores is harmless; missing one is not.
+	const secureOptions = [true, false];
 	const hosts = hostCandidates(url.hostname);
 
 	for (const host of hosts) {

@@ -10,9 +10,11 @@ non-negotiables, in brief:
    Enforced by `apps/MineOS.Tests/Architecture/LayerDependencyTests.cs`; don't
    weaken it to fit a change.
 
-2. **Tests green before "done."** CI does **not** run the .NET suite — run it
-   locally: `dotnet test apps/MineOS.Tests/MineOS.Tests.csproj`. Never claim done
-   with failing or absent tests. Frontend: `cd apps/web && npm run check`.
+2. **Tests green before "done."** CI runs all three suites, but run them locally
+   too: `dotnet test apps/MineOS.Tests/MineOS.Tests.csproj`,
+   `cd apps/web && npm run check && npm run test:unit`, and
+   `cd tools/mineos-cli && go test ./... -race`. Never claim done with failing or
+   absent tests.
 
 3. **Don't bypass auth.** Valid `X-Api-Key` = admin; `ServerAccessFilter` gates
    every server-scoped route; BuildTools/imports stay under the admin-only group;

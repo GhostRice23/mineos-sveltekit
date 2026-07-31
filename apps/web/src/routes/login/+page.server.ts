@@ -1,11 +1,14 @@
-import { redirect, fail } from '@sveltejs/kit';
+import { redirect, fail, isRedirect } from '@sveltejs/kit';
+import { loginNoticeFor } from '$lib/loginNotice';
+import { secureCookieFlag } from '$lib/server/requestProtocol';
 import type { Actions, PageServerLoad } from './$types';
 
-export const load: PageServerLoad = async ({ cookies }) => {
+export const load: PageServerLoad = async ({ cookies, url }) => {
 	const token = cookies.get('auth_token');
 	if (token) {
 		throw redirect(303, '/servers');
 	}
+	return { notice: loginNoticeFor(url.searchParams.get('reason')) };
 };
 
 export const actions = {
@@ -36,7 +39,10 @@ export const actions = {
 
 			const result = await response.json();
 
-			const secure = url.protocol === 'https:';
+			// Derived from the browser-facing scheme, not ORIGIN — a `Secure`
+			// cookie issued to a plain-HTTP visitor is dropped silently and the
+			// user is bounced back to /login with no error (issue #114).
+			const secure = secureCookieFlag(request, url);
 
 			// Set httpOnly cookie with the JWT token
 			// User info is loaded server-side via /api/auth/me in layout.server.ts
@@ -50,8 +56,8 @@ export const actions = {
 
 			throw redirect(303, '/servers');
 		} catch (err) {
-			// SvelteKit's redirect throws a special redirect response, re-throw it
-			if (err && typeof err === 'object' && 'status' in err && 'location' in err) {
+			// SvelteKit signals the redirect above by throwing; re-throw it.
+			if (isRedirect(err)) {
 				throw err;
 			}
 			console.error('Login error:', err);

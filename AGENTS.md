@@ -41,16 +41,18 @@ compiles but is still forbidden.)
 
 ## 2. Tests must be green before anything is "done"
 
-CI **only builds the web app — it does not run the .NET tests.** So the .NET suite is
-your responsibility locally:
+CI now runs all three suites on every PR (`.github/workflows/`):
 
-```
-dotnet test apps/MineOS.Tests/MineOS.Tests.csproj
-```
+| Suite | Workflow | Command |
+|-------|----------|---------|
+| .NET (xUnit) | `dotnet-ci.yml` | `dotnet test apps/MineOS.Tests/MineOS.Tests.csproj` |
+| Web (svelte-check + vitest) | `node.js.yml` | `cd apps/web && npm run check && npm run test:unit` |
+| Go CLI | `go-cli-ci.yml` | `cd tools/mineos-cli && go vet ./... && go test ./... -race` |
 
-Never mark a task complete, open a PR as ready, or claim success with failing or
-absent tests. If you changed backend behavior, a passing suite that never exercised
-your change is not evidence — add or extend a test. Frontend: `cd apps/web && npm run check`.
+**Run them locally anyway before you push** — a red CI run after the fact is a slower
+way to learn the same thing. Never mark a task complete, open a PR as ready, or claim
+success with failing or absent tests. If you changed backend behavior, a passing suite
+that never exercised your change is not evidence — add or extend a test.
 
 ## 3. Security & auth invariants — do not bypass
 

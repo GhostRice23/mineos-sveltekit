@@ -318,12 +318,55 @@ func (c *Client) StreamConsoleLogs(ctx context.Context, name, source string) (<-
 
 // PerfSample mirrors the API's PerformanceSampleDto (the fields the CLI shows).
 type PerfSample struct {
-	IsRunning   bool     `json:"isRunning"`
-	CpuPercent  float64  `json:"cpuPercent"`
-	RamUsedMb   int64    `json:"ramUsedMb"`
-	RamTotalMb  int64    `json:"ramTotalMb"`
-	Tps         *float64 `json:"tps"`
-	PlayerCount int      `json:"playerCount"`
+	Timestamp   time.Time `json:"timestamp"`
+	IsRunning   bool      `json:"isRunning"`
+	CpuPercent  float64   `json:"cpuPercent"`
+	RamUsedMb   int64     `json:"ramUsedMb"`
+	RamTotalMb  int64     `json:"ramTotalMb"`
+	Tps         *float64  `json:"tps"`
+	PlayerCount int       `json:"playerCount"`
+}
+
+// PerformanceHistory returns recorded samples for a server, oldest first.
+//
+// The API has stored this all along; the metrics panel just never asked, so it
+// opened blank and stayed that way until the first live sample arrived. The
+// server clamps the window to 5..1440 minutes.
+func (c *Client) PerformanceHistory(ctx context.Context, name string, minutes int) ([]PerfSample, error) {
+	if strings.TrimSpace(c.apiKey) == "" {
+		return nil, ErrApiKeyMissing
+	}
+	if strings.TrimSpace(name) == "" {
+		return nil, errors.New("server name is required")
+	}
+
+	endpoint := fmt.Sprintf("%s/servers/%s/performance/history?minutes=%d",
+		c.apiBaseURL, url.PathEscape(name), minutes)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("X-Api-Key", c.apiKey)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
+		return nil, ErrApiKeyInvalid
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("performance history failed: %s", readBody(resp.Body))
+	}
+
+	var samples []PerfSample
+	if err := json.NewDecoder(resp.Body).Decode(&samples); err != nil {
+		return nil, err
+	}
+	return samples, nil
 }
 
 // StreamPerformance opens the per-server performance SSE (2s cadence) and emits

@@ -3,12 +3,11 @@ package commands
 import (
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/google/uuid"
-	"github.com/joho/godotenv"
+
+	"github.com/freemancraft/mineos-sveltekit/tools/mineos-cli/internal/infrastructure/env"
 )
 
 // envDefault defines a required env var and its default value.
@@ -33,11 +32,9 @@ var requiredEnvDefaults = []envDefault{
 // ensureEnvDefaults adds any missing required env vars to the .env file.
 // Returns the list of keys that were added.
 func ensureEnvDefaults(envPath string, out io.Writer) ([]string, error) {
-	if envPath == "" {
-		envPath = ".env"
-	}
+	repo := envRepo(envPath)
 
-	values, err := loadEnvValues(envPath)
+	values, err := repo.Values()
 	if err != nil {
 		return nil, err
 	}
@@ -53,13 +50,13 @@ func ensureEnvDefaults(envPath string, out io.Writer) ([]string, error) {
 			val = d.generator()
 		}
 
+		// Comment first, then the key, so each lands directly under its heading.
 		if d.comment != "" {
-			if err := appendLineIfMissing(envPath, d.comment); err != nil {
+			if err := repo.EnsureComment(d.comment); err != nil {
 				return nil, err
 			}
 		}
-
-		if err := setEnvFileValue(envPath, d.key, val); err != nil {
+		if err := repo.Set(d.key, val); err != nil {
 			return nil, err
 		}
 		added = append(added, d.key)
@@ -71,63 +68,16 @@ func ensureEnvDefaults(envPath string, out io.Writer) ([]string, error) {
 	return added, nil
 }
 
-// appendLineIfMissing appends a line to a file if it doesn't already contain it.
-func appendLineIfMissing(path string, line string) error {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	if strings.Contains(string(data), line) {
-		return nil
-	}
-	content := string(data)
-	if !strings.HasSuffix(content, "\n") {
-		content += "\n"
-	}
-	content += "\n" + line + "\n"
-	return os.WriteFile(path, []byte(content), 0o600)
+// envRepo builds the single .env reader/writer for a path. All .env access in
+// the CLI goes through it — see infrastructure/env for why.
+func envRepo(path string) *env.DotenvRepository {
+	return env.NewDotenvRepository(env.ResolvePath(path))
 }
 
 func loadEnvValues(path string) (map[string]string, error) {
-	envPath := strings.TrimSpace(path)
-	if envPath == "" {
-		envPath = ".env"
-	}
-	return godotenv.Read(envPath)
+	return envRepo(path).Values()
 }
 
 func setEnvFileValue(path, key, value string) error {
-	envPath := strings.TrimSpace(path)
-	if envPath == "" {
-		envPath = ".env"
-	}
-	envPath = filepath.Clean(envPath)
-
-	data, err := os.ReadFile(envPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return os.WriteFile(envPath, []byte(key+"="+value+"\n"), 0o600)
-		}
-		return err
-	}
-
-	lines := strings.Split(string(data), "\n")
-	found := false
-	prefix := key + "="
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, prefix) {
-			lines[i] = prefix + value
-			found = true
-		}
-	}
-	if !found {
-		lines = append(lines, prefix+value)
-	}
-
-	output := strings.Join(lines, "\n")
-	if !strings.HasSuffix(output, "\n") {
-		output += "\n"
-	}
-	return os.WriteFile(envPath, []byte(output), 0o600)
+	return envRepo(path).Set(key, value)
 }

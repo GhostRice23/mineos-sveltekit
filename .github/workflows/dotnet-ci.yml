@@ -1,0 +1,51 @@
+name: .NET CI
+
+# The backend test suite used to run nowhere but on contributors' machines
+# (AGENTS.md §2), so a change that broke it only surfaced after merge. This
+# runs it on every PR.
+
+on:
+  push:
+    branches: [vibing, master]
+    paths:
+      - 'apps/MineOS.*/**'
+      - 'mineos-sveltkit.sln'
+      - 'nuget.config'
+      - '.github/workflows/dotnet-ci.yml'
+  pull_request:
+    branches: [vibing, master]
+    paths:
+      - 'apps/MineOS.*/**'
+      - 'mineos-sveltkit.sln'
+      - 'nuget.config'
+      - '.github/workflows/dotnet-ci.yml'
+  workflow_dispatch:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        run: dotnet restore apps/MineOS.Tests/MineOS.Tests.csproj
+
+      - name: Build
+        run: dotnet build apps/MineOS.Tests/MineOS.Tests.csproj --no-restore -c Release
+
+      # Includes Architecture/LayerDependencyTests.cs, which fails if Domain or
+      # Application gains a framework/outward dependency.
+      - name: Test
+        run: dotnet test apps/MineOS.Tests/MineOS.Tests.csproj --no-build -c Release --logger "trx;LogFileName=test-results.trx"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dotnet-test-results
+          path: '**/TestResults/*.trx'
+          if-no-files-found: ignore

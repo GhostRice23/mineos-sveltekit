@@ -77,3 +77,79 @@ func TestStreamPerformance_ParsesSSE(t *testing.T) {
 		t.Fatalf("expected nil tps on second sample, got %v", *second.Tps)
 	}
 }
+
+func TestPerformanceHistory_DecodesSamplesOldestFirst(t *testing.T) {
+	var gotQuery string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/servers/lobby/performance/history", func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[
+			{"timestamp":"2026-07-30T10:00:00Z","isRunning":true,"cpuPercent":12.5,"ramUsedMb":1024,"ramTotalMb":4096,"tps":19.8,"playerCount":3},
+			{"timestamp":"2026-07-30T10:01:00Z","isRunning":true,"cpuPercent":30,"ramUsedMb":2048,"ramTotalMb":4096,"tps":null,"playerCount":5}
+		]`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	samples, err := NewClient(srv.URL, "k").PerformanceHistory(context.Background(), "lobby", 60)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(samples) != 2 {
+		t.Fatalf("want 2 samples, got %d", len(samples))
+	}
+	if gotQuery != "minutes=60" {
+		t.Errorf("query = %q, want minutes=60", gotQuery)
+	}
+	if samples[0].Tps == nil || *samples[0].Tps != 19.8 {
+		t.Error("tps not decoded")
+	}
+	if samples[1].Tps != nil {
+		t.Error("null tps should decode as nil, not 0")
+	}
+	if samples[0].Timestamp.IsZero() {
+		t.Error("timestamp not decoded")
+	}
+	if samples[1].CpuPercent != 30 || samples[1].PlayerCount != 5 {
+		t.Errorf("sample not decoded: %+v", samples[1])
+	}
+}
+
+func TestPerformanceHistory_EscapesServerName(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// EscapedPath, not Path: net/http hands the handler the decoded form,
+		// so Path would show the space back and prove nothing.
+		gotPath = r.URL.EscapedPath()
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer srv.Close()
+
+	if _, err := NewClient(srv.URL, "k").PerformanceHistory(context.Background(), "my server", 60); err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/api/v1/servers/my%20server/performance/history" {
+		t.Errorf("path = %q, want the name percent-encoded", gotPath)
+	}
+}
+
+func TestPerformanceHistory_RequiresKeyAndName(t *testing.T) {
+	if _, err := NewClient("http://example.invalid", "").PerformanceHistory(context.Background(), "lobby", 60); err != ErrApiKeyMissing {
+		t.Errorf("err = %v, want ErrApiKeyMissing", err)
+	}
+	if _, err := NewClient("http://example.invalid", "k").PerformanceHistory(context.Background(), "", 60); err == nil {
+		t.Error("expected an error for an empty server name")
+	}
+}
+
+func TestPerformanceHistory_SurfacesAuthFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	if _, err := NewClient(srv.URL, "k").PerformanceHistory(context.Background(), "lobby", 60); err != ErrApiKeyInvalid {
+		t.Errorf("err = %v, want ErrApiKeyInvalid", err)
+	}
+}

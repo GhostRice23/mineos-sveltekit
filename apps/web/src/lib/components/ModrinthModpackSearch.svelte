@@ -26,7 +26,9 @@
 	let searchError = $state<string | null>(null);
 	let pageIndex = 0;
 	let pageSize = 20;
-	let hasMore = true;
+	// $state: hasMore gates the "Load more" branch in the markup, so mutating a
+	// plain let never re-rendered it.
+	let hasMore = $state(true);
 	let loadingMore = $state(false);
 	let searchDebounce: ReturnType<typeof setTimeout> | null = null;
 
@@ -41,7 +43,7 @@
 	let installingVersionId = $state<string | null>(null);
 	let installProgress = $state<{ status: string; percentage: number; message?: string } | null>(null);
 	let installEventSource: EventSource | null = null;
-	let outputEl: HTMLDivElement | null = null;
+	let outputEl = $state<HTMLDivElement | null>(null);
 
 	const commonMinecraftVersions = [
 		'auto',

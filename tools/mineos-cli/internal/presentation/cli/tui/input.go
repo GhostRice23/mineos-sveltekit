@@ -9,6 +9,21 @@ import (
 
 // HandleKey processes key input in normal mode
 func (m TuiModel) HandleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// The help overlay swallows every key except the ones that dismiss it, so
+	// nothing happens behind it by accident. Ctrl+C still quits — it must work
+	// from anywhere.
+	if m.Mode == ModeHelp {
+		if msg.Type == tea.KeyCtrlC {
+			m.Quitting = true
+			m.StopLogs()
+			return m, tea.Quit
+		}
+		if msg.Type == tea.KeyEsc || msg.String() == "?" {
+			m.Mode = ModeNormal
+		}
+		return m, nil
+	}
+
 	switch msg.Type {
 	case tea.KeyCtrlC:
 		m.Quitting = true
@@ -42,6 +57,9 @@ func (m TuiModel) HandleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Vim-style navigation
 	switch msg.String() {
+	case "?":
+		m.Mode = ModeHelp
+		return m, nil
 	case "q":
 		m.Quitting = true
 		m.StopLogs()
@@ -58,6 +76,14 @@ func (m TuiModel) HandleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Toggle pre-release updates in settings view
 		if m.CurrentView == ViewSettings && m.ConfigReady {
 			return m, m.ToggleEnvSettingCmd("MINEOS_CLI_PRERELEASE_UPDATES", m.Cfg.PreReleaseUpdates)
+		}
+	case "r":
+		// Reconnect the log stream. Automatic reconnects stop after
+		// MaxLogRetries, so there has to be a way to ask for more.
+		if m.CurrentView == ViewServiceLogs || m.CurrentView == ViewServers {
+			m.resetLogStream()
+			m.ErrMsg = ""
+			return m, m.StartLogStreamCmd()
 		}
 	case "/":
 		// Enter search mode in logs views
@@ -108,7 +134,7 @@ func (m TuiModel) navLeft() (tea.Model, tea.Cmd) {
 					prevIdx = len(sources) - 1
 				}
 				m.LogSource = sources[prevIdx]
-				m.Logs = nil
+				m.resetLogStream()
 				m.LogScroll = 0 // Reset scroll when switching sources
 				return m, m.StartLogStreamCmd()
 			}
@@ -126,7 +152,7 @@ func (m TuiModel) navRight() (tea.Model, tea.Cmd) {
 			if svc == m.LogSource {
 				nextIdx := (i + 1) % len(sources)
 				m.LogSource = sources[nextIdx]
-				m.Logs = nil
+				m.resetLogStream()
 				m.LogScroll = 0 // Reset scroll when switching sources
 				return m, m.StartLogStreamCmd()
 			}
@@ -158,7 +184,7 @@ func (m TuiModel) navUp() (tea.Model, tea.Cmd) {
 		m.Selected--
 		// Always show Minecraft logs for selected server
 		m.MinecraftSource = m.SelectedServer()
-		m.Logs = nil
+		m.resetLogStream()
 		return m, m.StartLogStreamCmd()
 	}
 
@@ -194,7 +220,7 @@ func (m TuiModel) navDown() (tea.Model, tea.Cmd) {
 		m.Selected++
 		// Always show Minecraft logs for selected server
 		m.MinecraftSource = m.SelectedServer()
-		m.Logs = nil
+		m.resetLogStream()
 		return m, m.StartLogStreamCmd()
 	}
 
@@ -256,12 +282,12 @@ func (m TuiModel) navSelect() (tea.Model, tea.Cmd) {
 			// Switch to Minecraft logs for selected server
 			m.LogType = LogTypeMinecraft
 			m.MinecraftSource = m.SelectedServer()
-			m.Logs = nil
+			m.resetLogStream()
 			cmd = m.StartLogStreamCmd()
 		} else if item.View == ViewServiceLogs {
 			// Switch to Docker logs
 			m.LogType = LogTypeDocker
-			m.Logs = nil
+			m.resetLogStream()
 			cmd = m.StartLogStreamCmd()
 		}
 		return m, cmd
@@ -272,7 +298,7 @@ func (m TuiModel) navSelect() (tea.Model, tea.Cmd) {
 		}
 
 		// Handle special actions
-		if item.Action.Args[0] == "console" {
+		if item.Action.Kind == MenuKindConsole {
 			if m.SelectedServer() == "" {
 				m.ErrMsg = "Select a server first (go to Servers view)"
 				return m, nil
@@ -309,7 +335,7 @@ func (m TuiModel) executeServerAction() (tea.Model, tea.Cmd) {
 	serverName := m.SelectedServer()
 
 	// Handle back action
-	if action.Action == "back" {
+	if action.Action == ServerActionBack {
 		m.ServerActions = false
 		m.ActionIndex = 0
 		m.stopPerfStream()
@@ -317,7 +343,7 @@ func (m TuiModel) executeServerAction() (tea.Model, tea.Cmd) {
 	}
 
 	// Handle console command
-	if action.Action == "console" {
+	if action.Action == ServerActionConsole {
 		m.Mode = ModeCommand
 		m.Input.SetValue("")
 		m.Input.Focus()
@@ -328,7 +354,9 @@ func (m TuiModel) executeServerAction() (tea.Model, tea.Cmd) {
 	if action.Destructive {
 		menuItem := &MenuItem{
 			Label:       action.Label,
-			Args:        []string{"servers", serverName, action.Action},
+			Kind:        MenuKindServerAction,
+			Server:      serverName,
+			ServerAct:   action.Action,
 			Destructive: true,
 		}
 		m.ConfirmAction = menuItem
@@ -337,17 +365,10 @@ func (m TuiModel) executeServerAction() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Execute the server action
-	m.PreviousView = m.CurrentView
-	m.CurrentView = ViewOutput
-	m.OutputTitle = action.Label + ": " + serverName
-	m.OutputLines = []string{"Executing " + action.Label + " on " + serverName + "..."}
-
-	menuItem := MenuItem{
-		Label: action.Label,
-		Args:  []string{"servers", serverName, action.Action},
-	}
-	return m, m.ExecMenuItem(menuItem)
+	// Execute the server action in-process. No view switch: the result lands
+	// on the footer (which expires it) and the table refreshes, instead of
+	// dumping subprocess stdout into an output pane the user has to Esc out of.
+	return m, m.ServerActionCmd(serverName, action.Action, action.Label)
 }
 
 // navBack handles Esc key - goes back to previous view or exits
@@ -408,7 +429,7 @@ func (m TuiModel) executeNavAction(item NavItem) (tea.Model, tea.Cmd) {
 		Interactive: item.Action.Interactive,
 		Streaming:   item.Action.Streaming,
 	}
-	return m, m.ExecMenuItem(menuItem)
+	return m, m.RunMenuItem(menuItem)
 }
 
 // HandleCommandInput handles input when in command mode
@@ -485,7 +506,7 @@ func (m TuiModel) HandleConfirmInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.OutputTitle = action.Label
 			m.OutputLines = []string{"Executing " + action.Label + "..."}
 
-			return m, m.ExecMenuItem(*action)
+			return m, m.RunMenuItem(*action)
 		}
 		m.Mode = ModeNormal
 		return m, nil
@@ -505,7 +526,7 @@ func (m TuiModel) HandleConfirmInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.OutputTitle = action.Label
 			m.OutputLines = []string{"Executing " + action.Label + "..."}
 
-			return m, m.ExecMenuItem(*action)
+			return m, m.RunMenuItem(*action)
 		}
 		return m, nil
 

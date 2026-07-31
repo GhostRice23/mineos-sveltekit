@@ -211,13 +211,24 @@
 							/>
 							<datalist id="java-binary-options">
 								<option value="java"></option>
-								<option value="/usr/lib/jvm/temurin-8-jre/bin/java"></option>
-								<option value="/usr/lib/jvm/java-17-openjdk-amd64/bin/java"></option>
-								<option value="/usr/lib/jvm/temurin-21-jre/bin/java"></option>
+								{#each data.javaRuntimes as runtime (runtime.path)}
+									<option value={runtime.path}>{runtime.label}</option>
+								{/each}
 							</datalist>
-							<p class="field-hint">
-								Use <code>java</code> for the default runtime or set a full path to target Java 8/17/21.
-							</p>
+							{#if data.javaRuntimes.length > 0}
+								<p class="field-hint">
+									Leave as <code>java</code> to pick the runtime automatically from the
+									Minecraft version, or choose one of the
+									{data.javaRuntimes.length} runtime{data.javaRuntimes.length === 1 ? '' : 's'}
+									installed on the host:
+									{data.javaRuntimes.map((r) => r.label).join(', ')}.
+								</p>
+							{:else}
+								<p class="field-hint">
+									Use <code>java</code> for the default runtime, or set a full path. No other
+									runtimes were detected on the host.
+								</p>
+							{/if}
 						</div>
 
 						<div class="form-field">

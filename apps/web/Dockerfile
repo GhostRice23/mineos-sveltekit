@@ -34,6 +34,9 @@ COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/build ./build
 COPY --from=build /app/server.js ./server.js
+# server.js imports its WebSocket proxy from here — without it the container
+# fails at startup with ERR_MODULE_NOT_FOUND.
+COPY --from=build /app/server ./server
 
 EXPOSE 3000
 

@@ -20,7 +20,9 @@
 	let searchError = $state<string | null>(null);
 	let pageIndex = 0;
 	let pageSize = 20;
-	let hasMore = true;
+	// $state: hasMore gates the "Load more" branch in the markup, so mutating a
+	// plain let never re-rendered it.
+	let hasMore = $state(true);
 	let loadingMore = $state(false);
 	let searchDebounce: ReturnType<typeof setTimeout> | null = null;
 

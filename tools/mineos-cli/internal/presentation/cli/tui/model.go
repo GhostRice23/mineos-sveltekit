@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/freemancraft/mineos-sveltekit/tools/mineos-cli/internal/application/usecases"
 	"github.com/freemancraft/mineos-sveltekit/tools/mineos-cli/internal/domain/config"
@@ -31,6 +32,7 @@ const (
 	ModeConfirm
 	ModeInteractive // Running an interactive command inside the TUI
 	ModeSearch      // Searching logs
+	ModeHelp        // Keybinding reference overlay
 )
 
 // LogType represents the type of log being viewed
@@ -96,6 +98,10 @@ type TuiModel struct {
 	LogsChan        <-chan string
 	LogErrsChan     <-chan error
 	LogCancel       context.CancelFunc
+	// LogRetries counts consecutive failed reconnects; reset as soon as a line
+	// arrives. Capped at MaxLogRetries so a stream that will never come back
+	// stops being retried forever.
+	LogRetries int
 
 	// Live per-server performance stream (server-actions view)
 	PerfSample *api.PerfSample
@@ -103,13 +109,32 @@ type TuiModel struct {
 	PerfErrs   <-chan error
 	PerfCancel context.CancelFunc
 	PerfServer string
+	// PerfHistory backs the sparklines: seeded from the API's stored history so
+	// the panel opens with context instead of blank, then extended with each
+	// live sample. Oldest first, capped at MaxPerfHistory.
+	PerfHistory []api.PerfSample
 
-	LogScroll       int    // Scroll offset for logs view
-	LogSearchQuery  string // Search query for logs
-	LogSearchMode   bool   // Whether in search mode
+	LogScroll      int    // Scroll offset for logs view
+	LogSearchQuery string // Search query for logs
+	LogSearchMode  bool   // Whether in search mode
 
 	StatusMsg string
 	ErrMsg    string
+	// StatusSeq/ErrSeq stamp each notice so its scheduled expiry only fires
+	// while it is still the one on screen — a newer message is never cut short
+	// by an older message's timer.
+	StatusSeq int
+	ErrSeq    int
+
+	// ServersLoaded is true once a server list has come back, so an empty
+	// table can say "none yet" instead of "loading".
+	ServersLoaded bool
+
+	// FirstLoadDone is set once the initial config load has answered, either
+	// way. It bounds the startup spinner: an API that never comes up must not
+	// leave it spinning (and re-rendering) forever — the servers table reports
+	// that state instead.
+	FirstLoadDone bool
 
 	// Navigation
 	NavItems  []NavItem // Full navigation menu
@@ -127,6 +152,10 @@ type TuiModel struct {
 	Input    textinput.Model
 	Quitting bool
 
+	// Spinner animates while something is in flight. Loading feedback used to
+	// be static text, so a slow API and a hung one looked the same.
+	Spinner spinner.Model
+
 	// Confirmation dialog state
 	ConfirmAction  *MenuItem
 	ConfirmMessage string
@@ -140,6 +169,9 @@ type TuiModel struct {
 	StreamingOutput  <-chan string
 	StreamingRunning bool
 	StreamingLabel   string
+	// StreamingEffect is carried from the action to its completion so the
+	// container-state update does not have to guess from the label.
+	StreamingEffect StackEffect
 
 	// Retry state for error recovery
 	RetryCount int
@@ -148,10 +180,52 @@ type TuiModel struct {
 	ContainersStopped bool // True when user intentionally stopped containers
 }
 
+// MenuKind classifies what selecting a menu item does, so the handler does not
+// have to infer it from argv. `Args[0] == "console"` also panicked on an item
+// with no args at all.
+type MenuKind int
+
+const (
+	// MenuKindCommand runs `mineos <Args...>` as a subprocess. Kept for the
+	// stack and system actions, which drive docker compose or need a real
+	// terminal (install/reconfigure/uninstall).
+	MenuKindCommand MenuKind = iota
+	// MenuKindConsole opens the console prompt instead of running anything.
+	MenuKindConsole
+	// MenuKindServerAction calls the API in-process. Server start/stop/restart/
+	// kill used to re-execute the mineos binary just to have it call the same
+	// endpoint this process could call directly — which spawned a subprocess
+	// per click, depended on os.Executable() resolving, and turned typed API
+	// errors into scraped stdout.
+	MenuKindServerAction
+)
+
+// StackEffect is what an action does to the containers.
+//
+// Container state used to be inferred from the label text
+// (strings.Contains(label, "Stop")), which quietly tied behaviour to wording:
+// renaming a menu entry, or translating it, would silently stop the TUI
+// noticing that the stack went down.
+type StackEffect int
+
+const (
+	StackEffectNone StackEffect = iota
+	StackEffectStops
+	StackEffectStarts
+)
+
 // MenuItem represents an item in the command menu
 type MenuItem struct {
-	Label       string
-	Args        []string
+	Label  string
+	Args   []string
+	Kind   MenuKind
+	Effect StackEffect
+
+	// Server and ServerAct carry the target of a MenuKindServerAction, so the
+	// confirmation dialog can run it without re-deriving it from Args.
+	Server    string
+	ServerAct ServerAction
+
 	Destructive bool // If true, requires confirmation
 	Interactive bool // If true, requires user input (use tea.ExecProcess)
 	Streaming   bool // If true, stream output in real-time (for long-running commands)
@@ -194,10 +268,16 @@ type LogStreamStartedMsg struct {
 	LogSource string
 }
 
-// LogLineMsg is sent for each log line received
-type LogLineMsg struct {
-	Line string
+// LogLinesMsg carries every log line that was ready at once, so a burst costs
+// one re-render instead of one per line.
+type LogLinesMsg struct {
+	Lines []string
 }
+
+// LogStreamClosedMsg is sent when the log stream ends without an error. It is
+// distinct from LogRetryMsg so the reconnect can be delayed and counted; the
+// two used to be the same message, which reconnected with no delay at all.
+type LogStreamClosedMsg struct{}
 
 // LogErrorMsg is sent when a log streaming error occurs
 type LogErrorMsg struct {
@@ -206,6 +286,13 @@ type LogErrorMsg struct {
 
 // LogRetryMsg is sent to trigger log stream retry
 type LogRetryMsg struct{}
+
+// ClearStatusMsg / ClearErrorMsg expire a notice after its TTL. Seq identifies
+// which notice the timer was armed for; a mismatch means it has been replaced
+// and the timer is ignored.
+type ClearStatusMsg struct{ Seq int }
+
+type ClearErrorMsg struct{ Seq int }
 
 // ActionResultMsg is sent when an action completes
 type ActionResultMsg struct {
@@ -241,6 +328,7 @@ type InteractiveFinishedMsg struct {
 type StreamingStartedMsg struct {
 	Output <-chan string
 	Label  string
+	Effect StackEffect
 }
 
 // StreamingOutputMsg is sent for each line of streaming command output
@@ -250,8 +338,9 @@ type StreamingOutputMsg struct {
 
 // StreamingFinishedMsg is sent when a streaming command completes
 type StreamingFinishedMsg struct {
-	Label string
-	Err   error
+	Label  string
+	Effect StackEffect
+	Err    error
 }
 
 // SettingsToggledMsg is sent when a setting is toggled in the TUI
@@ -280,6 +369,15 @@ type PerfStreamStartedMsg struct {
 
 // PerfSampleMsg carries one live performance sample
 type PerfSampleMsg struct{ Sample api.PerfSample }
+
+// PerfHistoryMsg carries the stored history that seeds the sparklines. Server
+// is checked on arrival so a slow response for a previously selected server
+// cannot land in the panel of the one now on screen.
+type PerfHistoryMsg struct {
+	Server  string
+	Samples []api.PerfSample
+	Err     error
+}
 
 // PerfErrorMsg signals the perf stream errored or ended
 type PerfErrorMsg struct{ Err error }

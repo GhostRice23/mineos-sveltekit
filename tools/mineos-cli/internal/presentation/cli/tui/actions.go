@@ -2,6 +2,7 @@ package tui
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -10,6 +11,9 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/freemancraft/mineos-sveltekit/tools/mineos-cli/internal/application/usecases"
+	"github.com/freemancraft/mineos-sveltekit/tools/mineos-cli/internal/infrastructure/env"
 )
 
 func (m TuiModel) ConsoleCommandCmd(command string) tea.Cmd {
@@ -25,6 +29,41 @@ func (m TuiModel) ConsoleCommandCmd(command string) tea.Cmd {
 			Message: fmt.Sprintf("sent to %s: %s", server, command),
 			Err:     err,
 		}
+	}
+}
+
+// RunMenuItem executes a menu item by whichever path its kind calls for.
+//
+// One entry point for both execution strategies, so callers no longer decide
+// between them: in-process for anything the API can do, a subprocess only for
+// docker compose orchestration and the genuinely interactive commands.
+func (m TuiModel) RunMenuItem(item MenuItem) tea.Cmd {
+	if item.Kind == MenuKindServerAction {
+		return m.ServerActionCmd(item.Server, item.ServerAct, item.Label)
+	}
+	return m.ExecMenuItem(item)
+}
+
+// ServerActionCmd performs a server action against the API in this process.
+func (m TuiModel) ServerActionCmd(server string, action ServerAction, label string) tea.Cmd {
+	if server == "" {
+		return func() tea.Msg { return ActionResultMsg{Err: errors.New("select a server first")} }
+	}
+	client := m.Client
+	if client == nil || !m.ConfigReady {
+		return func() tea.Msg { return ActionResultMsg{Err: errors.New("API not connected")} }
+	}
+
+	ctx := m.Ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	return func() tea.Msg {
+		if err := usecases.NewServerActionUseCase(client).Execute(ctx, server, string(action)); err != nil {
+			return ActionResultMsg{Err: err}
+		}
+		return ActionResultMsg{Message: fmt.Sprintf("%s: %s", label, server)}
 	}
 }
 
@@ -49,7 +88,7 @@ func (m TuiModel) ExecMenuItem(item MenuItem) tea.Cmd {
 
 	// Streaming commands show output in real-time (for long-running docker operations)
 	if item.Streaming {
-		return m.StartStreamingCmd(exe, args, item.Label)
+		return m.StartStreamingCmd(exe, args, item.Label, item.Effect)
 	}
 
 	// Non-interactive commands capture output for display in TUI
@@ -69,7 +108,7 @@ func (m TuiModel) ExecMenuItem(item MenuItem) tea.Cmd {
 }
 
 // StartStreamingCmd starts a command that streams output without requiring stdin
-func (m TuiModel) StartStreamingCmd(exe string, args []string, label string) tea.Cmd {
+func (m TuiModel) StartStreamingCmd(exe string, args []string, label string, effect StackEffect) tea.Cmd {
 	return func() tea.Msg {
 		cmd := exec.Command(exe, args...)
 
@@ -79,6 +118,7 @@ func (m TuiModel) StartStreamingCmd(exe string, args []string, label string) tea
 			return StreamingStartedMsg{
 				Output: makeErrorChan("Failed to create pipe: " + err.Error()),
 				Label:  label,
+				Effect: effect,
 			}
 		}
 
@@ -90,6 +130,7 @@ func (m TuiModel) StartStreamingCmd(exe string, args []string, label string) tea
 			return StreamingStartedMsg{
 				Output: makeErrorChan("Failed to start: " + err.Error()),
 				Label:  label,
+				Effect: effect,
 			}
 		}
 
@@ -134,6 +175,7 @@ func (m TuiModel) StartStreamingCmd(exe string, args []string, label string) tea
 		return StreamingStartedMsg{
 			Output: outputChan,
 			Label:  label,
+			Effect: effect,
 		}
 	}
 }
@@ -191,35 +233,13 @@ func (m TuiModel) ToggleEnvSettingCmd(envKey, currentValue string) tea.Cmd {
 	}
 }
 
-// writeEnvValue sets a key=value in the .env file
+// writeEnvValue sets a key=value in the .env file.
+//
+// Delegates to the one .env writer rather than re-implementing it; this used to
+// be a second copy of commands.setEnvFileValue that could disagree with it
+// about quoting and permissions.
 func writeEnvValue(path, key, value string) error {
-	if path == "" {
-		path = ".env"
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return os.WriteFile(path, []byte(key+"="+value+"\n"), 0o600)
-		}
-		return err
-	}
-	lines := strings.Split(string(data), "\n")
-	found := false
-	prefix := key + "="
-	for i, line := range lines {
-		if strings.HasPrefix(strings.TrimSpace(line), prefix) {
-			lines[i] = prefix + value
-			found = true
-		}
-	}
-	if !found {
-		lines = append(lines, prefix+value)
-	}
-	output := strings.Join(lines, "\n")
-	if !strings.HasSuffix(output, "\n") {
-		output += "\n"
-	}
-	return os.WriteFile(path, []byte(output), 0o600)
+	return env.NewDotenvRepository(env.ResolvePath(path)).Set(key, value)
 }
 
 func (m TuiModel) SelectedServer() string {

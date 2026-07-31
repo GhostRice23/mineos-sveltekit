@@ -54,53 +54,7 @@ public class ServerService : IServerService
     /// 1.17-1.20 requires Java 17 (falls back to 21), older requires Java 8.
     /// </summary>
     public static string ResolveJavaBinary(string? minecraftVersion)
-    {
-        if (string.IsNullOrWhiteSpace(minecraftVersion))
-            return "java"; // Use default JAVA_HOME
-
-        // Parse major.minor from version like "1.21.11", "26.1", etc.
-        var parts = minecraftVersion.Split('.');
-        if (!int.TryParse(parts[0], out var major))
-            return "java";
-
-        // New versioning: 26.x+ (Minecraft dropped the "1." prefix)
-        if (major >= 26)
-            return FindJavaBinary(25, 21);
-
-        // Old versioning: 1.x.y
-        if (major == 1 && parts.Length >= 2 && int.TryParse(parts[1], out var minor))
-        {
-            if (minor >= 21) return FindJavaBinary(21);
-            if (minor >= 17) return FindJavaBinary(21, 17); // 17 preferred, 21 fallback
-            return FindJavaBinary(8);
-        }
-
-        return "java";
-    }
-
-    private static string FindJavaBinary(params int[] preferredVersions)
-    {
-        foreach (var ver in preferredVersions)
-        {
-            // Check common Adoptium/Temurin install paths
-            var paths = new[]
-            {
-                $"/usr/lib/jvm/temurin-{ver}-jdk-amd64/bin/java",
-                $"/usr/lib/jvm/temurin-{ver}-jdk-arm64/bin/java",
-                $"/usr/lib/jvm/temurin-{ver}-jdk/bin/java",
-                $"/usr/lib/jvm/java-{ver}-openjdk-amd64/bin/java",
-                $"/usr/lib/jvm/java-{ver}-openjdk/bin/java",
-            };
-
-            foreach (var path in paths)
-            {
-                if (File.Exists(path))
-                    return path;
-            }
-        }
-
-        return "java"; // Fallback to PATH default
-    }
+        => new JavaRuntimeService().ResolveForMinecraftVersion(minecraftVersion);
 
     private string GetPropertiesPath(string name) =>
         Path.Combine(GetServerPath(name), "server.properties");

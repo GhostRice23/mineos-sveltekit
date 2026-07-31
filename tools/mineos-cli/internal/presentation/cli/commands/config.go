@@ -3,10 +3,8 @@ package commands
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 
-	"github.com/joho/godotenv"
 	"github.com/spf13/cobra"
 
 	"github.com/freemancraft/mineos-sveltekit/tools/mineos-cli/internal/application/usecases"
@@ -97,18 +95,10 @@ Examples:
 				return fmt.Errorf("invalid channel: %s (must be 'stable' or 'prerelease')", args[0])
 			}
 
-			// Update .env file
-			envMap, err := godotenv.Read(cfg.EnvPath)
-			if err != nil && !os.IsNotExist(err) {
-				return fmt.Errorf("failed to read .env: %w", err)
-			}
-			if envMap == nil {
-				envMap = make(map[string]string)
-			}
-
-			envMap["MINEOS_CLI_PRERELEASE_UPDATES"] = value
-
-			if err := godotenv.Write(envMap, cfg.EnvPath); err != nil {
+			// Update .env in place. This used to read the whole file into a map
+			// and godotenv.Write it back, which silently discarded every
+			// comment, blank line and the user's ordering.
+			if err := setEnvFileValue(cfg.EnvPath, "MINEOS_CLI_PRERELEASE_UPDATES", value); err != nil {
 				return fmt.Errorf("failed to write .env: %w", err)
 			}
 

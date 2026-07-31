@@ -3,7 +3,14 @@
 	import type { ServerCategory } from './CategorySelect.svelte';
 
 	export type PluginImpl = 'paper' | 'spigot';
-	export type ModLoader = 'forge' | 'neoforge' | 'fabric' | 'quilt';
+	export type ModLoader =
+		| 'forge'
+		| 'neoforge'
+		| 'fabric'
+		| 'quilt'
+		| 'arclight-forge'
+		| 'arclight-neoforge'
+		| 'arclight-fabric';
 	export type ProxyImpl = 'velocity';
 	export type Implementation = PluginImpl | ModLoader | ProxyImpl;
 
@@ -85,6 +92,27 @@
 			icon: '🪡',
 			iconImage: '/images/loaders/quilt.svg',
 			color: '#8b5cf6'
+		},
+		{
+			id: 'arclight-forge' as const,
+			name: 'Arclight (Forge)',
+			description: 'Runs Forge mods and Bukkit plugins together. Fewer versions supported.',
+			icon: '🌉',
+			color: '#ef4444'
+		},
+		{
+			id: 'arclight-neoforge' as const,
+			name: 'Arclight (NeoForge)',
+			description: 'Runs NeoForge mods and Bukkit plugins together. Fewer versions supported.',
+			icon: '🌉',
+			color: '#f97316'
+		},
+		{
+			id: 'arclight-fabric' as const,
+			name: 'Arclight (Fabric)',
+			description: 'Runs Fabric mods and Bukkit plugins together. Fewer versions supported.',
+			icon: '🌉',
+			color: '#c4b5a4'
 		}
 	];
 

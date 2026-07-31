@@ -44,6 +44,40 @@ address in your browser. Either upgrade, or set `ORIGIN` in `.env` on the
 MineOS machine to the exact URL you type in the browser (e.g.
 `ORIGIN=http://192.168.1.50:3000`) and restart: `mineos stack restart`.
 
+## The login page just reloads — no error, no 403
+
+You type the right credentials, the page reloads, and you are back at the login
+form with nothing shown. That is a *successful* login whose session cookie the
+browser refused to keep, or a session the API then rejected.
+
+**The common cause was a `Secure` cookie on a plain-HTTP connection.** MineOS
+used to decide whether to mark the auth cookie `Secure` from the `ORIGIN` value
+in `.env` rather than from how your browser actually connected. With
+`ORIGIN=https://...` in `.env` but the UI opened over plain `http://`, the
+browser silently dropped the cookie and bounced you straight back to the login
+page. Current versions read the browser-facing scheme from `X-Forwarded-Proto`
+(falling back to the request URL), so both directions work — and behind a
+TLS-terminating proxy the cookie now correctly gets `Secure`.
+
+If it still happens after upgrading, the login page now tells you which of the
+two remaining causes it is:
+
+- *"Your session has expired"* — the API rejected the token. Sign in again;
+  if it repeats immediately, the API's signing key changed (for example the
+  data directory was reset) — restart the stack: `mineos stack restart`.
+- *"The MineOS API could not be reached"* — the web container cannot talk to
+  the API container. Check `mineos status` and `mineos logs api`.
+
+Both cases also log a `[auth]` line in the web container's output:
+`mineos logs web`.
+
+**If you are behind a reverse proxy, forward the scheme** so MineOS knows the
+browser is on HTTPS:
+
+```nginx
+proxy_set_header X-Forwarded-Proto $scheme;
+```
+
 ## Page loads but other devices can't reach MineOS at all
 
 If the web UI doesn't load from other devices (connection refused/timeout,

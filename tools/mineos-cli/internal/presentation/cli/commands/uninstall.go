@@ -351,6 +351,10 @@ func copyFile(src, dest string) error {
 type composeRunner struct {
 	exe      string
 	baseArgs []string
+	// exec runs one compose invocation. nil means the real os/exec path; tests
+	// inject a recorder so the orchestration can be asserted without docker
+	// installed and without starting anything.
+	exec func(name string, args []string, env []string) error
 }
 
 func detectCompose() (composeRunner, error) {
