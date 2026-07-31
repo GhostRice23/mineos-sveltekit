@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MineOS.Application.Interfaces;
 using MineOS.Application.Options;
+using MineOS.Domain.ValueObjects;
 using MineOS.Infrastructure.Utilities;
 
 namespace MineOS.Infrastructure.Services;
@@ -63,7 +64,14 @@ public sealed class ImportService : IImportService
             throw new ArgumentException("Server name is required");
         }
 
-        if (Path.GetFileName(serverName) != serverName)
+        // This creates a server, so it is held to the same allowlist as
+        // ServerService.CreateServerAsync. The previous check here was only
+        // Path.GetFileName(serverName) != serverName, which is weaker in both
+        // directions: it accepts ".." (GetFileName returns it unchanged) and it
+        // accepts quotes, which then reach a tar/rdiff-backup command line. That
+        // made import a way to give a server a name the create endpoint would
+        // have refused.
+        if (!ServerName.IsWellFormed(serverName))
         {
             throw new ArgumentException("Invalid server name");
         }
@@ -101,15 +109,20 @@ public sealed class ImportService : IImportService
             else if (filename.EndsWith(".tar.gz", StringComparison.OrdinalIgnoreCase) ||
                      filename.EndsWith(".tgz", StringComparison.OrdinalIgnoreCase))
             {
+                // See the note in ArchiveService: ArgumentList avoids the argv
+                // re-parse that lets a quote in a path inject extra tar options.
                 var psi = new ProcessStartInfo
                 {
                     FileName = "tar",
-                    Arguments = $"-xzf \"{archivePath}\" -C \"{tempDir}\"",
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
                     UseShellExecute = false,
                     CreateNoWindow = true
                 };
+                psi.ArgumentList.Add("-xzf");
+                psi.ArgumentList.Add(archivePath);
+                psi.ArgumentList.Add("-C");
+                psi.ArgumentList.Add(tempDir);
 
                 using var process = Process.Start(psi);
                 if (process == null)

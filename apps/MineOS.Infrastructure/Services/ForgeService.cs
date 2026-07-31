@@ -257,16 +257,21 @@ public sealed class ForgeService : IForgeService
             state.AppendOutput($"Starting Forge installer for {fullVersion}...");
             _logger.LogInformation("Running Forge installer in {ServerPath}", state.ServerPath);
 
+            // ArgumentList rather than an interpolated Arguments string: see the
+            // note in ArchiveService.
             var psi = new ProcessStartInfo
             {
                 FileName = "java",
-                Arguments = $"-jar \"{installerPath}\" --installServer",
                 WorkingDirectory = state.ServerPath,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
+
+            psi.ArgumentList.Add("-jar");
+            psi.ArgumentList.Add(installerPath);
+            psi.ArgumentList.Add("--installServer");
 
             using var process = Process.Start(psi);
             if (process == null)

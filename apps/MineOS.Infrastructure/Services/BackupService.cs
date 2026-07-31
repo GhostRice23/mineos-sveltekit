@@ -86,15 +86,19 @@ public sealed class BackupService : IBackupService
             Directory.CreateDirectory(backupPath);
 
             // Use rdiff-backup to create incremental backup
+            // ArgumentList rather than an interpolated Arguments string: see the note in ArchiveService.
             var psi = new ProcessStartInfo
             {
                 FileName = "rdiff-backup",
-                Arguments = $"backup \"{serverPath}\" \"{backupPath}\"",
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
+
+            psi.ArgumentList.Add("backup");
+            psi.ArgumentList.Add(serverPath);
+            psi.ArgumentList.Add(backupPath);
 
             using var process = Process.Start(psi);
             if (process == null)
@@ -146,15 +150,21 @@ public sealed class BackupService : IBackupService
         }
 
         // Use rdiff-backup to restore to specific increment
+        // ArgumentList rather than an interpolated Arguments string: see the note in ArchiveService.
         var psi = new ProcessStartInfo
         {
             FileName = "rdiff-backup",
-            Arguments = $"restore --at \"{timestamp}\" \"{backupPath}\" \"{serverPath}\"",
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true
         };
+
+        psi.ArgumentList.Add("restore");
+        psi.ArgumentList.Add("--at");
+        psi.ArgumentList.Add(timestamp);
+        psi.ArgumentList.Add(backupPath);
+        psi.ArgumentList.Add(serverPath);
 
         using var process = Process.Start(psi);
         if (process == null)
@@ -238,15 +248,19 @@ public sealed class BackupService : IBackupService
         }
 
         // Use rdiff-backup v2 syntax to list increment sizes
+        // ArgumentList rather than an interpolated Arguments string: see the note in ArchiveService.
         var psi = new ProcessStartInfo
         {
             FileName = "rdiff-backup",
-            Arguments = $"list increment-sizes \"{backupPath}\"",
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true
         };
+
+        psi.ArgumentList.Add("list");
+        psi.ArgumentList.Add("increment-sizes");
+        psi.ArgumentList.Add(backupPath);
 
         using var process = Process.Start(psi);
         if (process == null)
@@ -496,15 +510,21 @@ public sealed class BackupService : IBackupService
 
         var threshold = thresholdTime.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture);
 
+        // ArgumentList rather than an interpolated Arguments string: see the note in ArchiveService.
         var psi = new ProcessStartInfo
         {
             FileName = "rdiff-backup",
-            Arguments = $"remove increments --older-than {threshold} \"{backupPath}\"",
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true
         };
+
+        psi.ArgumentList.Add("remove");
+        psi.ArgumentList.Add("increments");
+        psi.ArgumentList.Add("--older-than");
+        psi.ArgumentList.Add(threshold);
+        psi.ArgumentList.Add(backupPath);
 
         using var process = Process.Start(psi);
         if (process == null)
@@ -540,15 +560,19 @@ public sealed class BackupService : IBackupService
         }
 
         // Use rdiff-backup v2 syntax to list increments
+        // ArgumentList rather than an interpolated Arguments string: see the note in ArchiveService.
         var psi = new ProcessStartInfo
         {
             FileName = "rdiff-backup",
-            Arguments = $"list increments \"{backupPath}\"",
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true
         };
+
+        psi.ArgumentList.Add("list");
+        psi.ArgumentList.Add("increments");
+        psi.ArgumentList.Add(backupPath);
 
         using var process = Process.Start(psi);
         if (process == null)

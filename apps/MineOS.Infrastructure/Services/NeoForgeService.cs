@@ -313,16 +313,21 @@ public sealed class NeoForgeService : INeoForgeService
             state.UpdateProgress(40, "Running NeoForge installer...");
 
             // Run the installer (same pattern as Forge)
+            // ArgumentList rather than an interpolated Arguments string: see the
+            // note in ArchiveService.
             var psi = new System.Diagnostics.ProcessStartInfo
             {
                 FileName = "java",
-                Arguments = $"-jar \"{installerPath}\" --installServer",
                 WorkingDirectory = state.ServerPath,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
+
+            psi.ArgumentList.Add("-jar");
+            psi.ArgumentList.Add(installerPath);
+            psi.ArgumentList.Add("--installServer");
 
             using var process = new System.Diagnostics.Process { StartInfo = psi };
             process.Start();
