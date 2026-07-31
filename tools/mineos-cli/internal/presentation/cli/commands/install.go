@@ -875,19 +875,29 @@ func dirExists(path string) bool {
 
 // reuse uninstall compose helper
 func (c composeRunner) run(args []string) error {
-	cmd := exec.Command(c.exe, append(c.baseArgs, args...)...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Stdin = os.Stdin
-	return cmd.Run()
+	return c.invoke(args, nil)
 }
 
 func (c composeRunner) runWithEnv(args []string, env []string) error {
-	cmd := exec.Command(c.exe, append(c.baseArgs, args...)...)
+	return c.invoke(args, env)
+}
+
+// invoke is the single place compose is actually executed, so the injected
+// seam covers every caller.
+func (c composeRunner) invoke(args []string, env []string) error {
+	full := append(append([]string{}, c.baseArgs...), args...)
+
+	if c.exec != nil {
+		return c.exec(c.exe, full, env)
+	}
+
+	cmd := exec.Command(c.exe, full...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
-	cmd.Env = append(os.Environ(), env...)
+	if env != nil {
+		cmd.Env = append(os.Environ(), env...)
+	}
 	return cmd.Run()
 }
 
