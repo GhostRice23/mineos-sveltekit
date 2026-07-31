@@ -229,30 +229,4 @@
 		color: #ef4444;
 	}
 
-	.confirm-bar {
-		grid-column: 1 / -1;
-		display: flex;
-		justify-content: flex-end;
-		padding-top: 16px;
-	}
-
-	.confirm-btn {
-		padding: 10px 28px;
-		background: var(--mc-grass, #6ab04c);
-		color: white;
-		border: none;
-		border-radius: 8px;
-		font-size: 15px;
-		font-weight: 600;
-		cursor: pointer;
-	}
-
-	.confirm-btn:hover {
-		filter: brightness(1.1);
-	}
-
-	.confirm-btn:disabled {
-		opacity: 0.5;
-		cursor: not-allowed;
-	}
 </style>

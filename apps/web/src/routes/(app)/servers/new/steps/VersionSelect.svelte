@@ -137,18 +137,4 @@
 		font-weight: 600;
 	}
 
-	.back-btn {
-		background: none;
-		border: 1px solid var(--border-color, #374151);
-		color: var(--text-secondary, #9ca3af);
-		padding: 0.35rem 0.75rem;
-		border-radius: 0.375rem;
-		cursor: pointer;
-		font-size: 0.85rem;
-	}
-
-	.back-btn:hover {
-		color: var(--text-primary, #f9fafb);
-		border-color: var(--text-secondary, #9ca3af);
-	}
 </style>

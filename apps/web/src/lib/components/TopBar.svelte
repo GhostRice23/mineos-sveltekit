@@ -749,10 +749,6 @@
 		color: #6ab04c;
 	}
 
-	.result-name {
-		color: inherit;
-	}
-
 	.result-meta {
 		color: #9aa2c5;
 		font-size: 12px;

@@ -1252,13 +1252,6 @@
 		color: #6f789b;
 	}
 
-	.link-action {
-		color: #a5b4fc;
-		font-size: 12px;
-		text-decoration: none;
-		align-self: center;
-	}
-
 	@media (max-width: 1080px) {
 		.profiles-shell {
 			grid-template-columns: 1fr;

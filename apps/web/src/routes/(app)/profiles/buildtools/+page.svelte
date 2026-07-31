@@ -522,7 +522,6 @@
 		color: #aab2d3;
 	}
 
-	input,
 	select {
 		background: #141827;
 		border: 1px solid #2a2f47;

@@ -559,25 +559,6 @@
 		border-left: 3px solid var(--color-success-border);
 	}
 
-	.status-list,
-	.recent-list {
-		list-style: none;
-		padding: 0;
-		margin: 0;
-		display: grid;
-		gap: 10px;
-	}
-
-	.status-list li,
-	.recent-list li {
-		padding: 10px 14px;
-		background: var(--color-info-bg);
-		border-radius: 8px;
-		color: var(--mc-text-secondary);
-		font-size: 14px;
-		border-left: 3px solid var(--color-info-border);
-	}
-
 	.license-badge {
 		margin-top: 20px;
 	}
@@ -605,49 +586,7 @@
 		height: 20px;
 	}
 
-	.support-links {
-		display: flex;
-		gap: 12px;
-		flex-wrap: wrap;
-	}
-
-	.support-link {
-		display: inline-flex;
-		align-items: center;
-		gap: 8px;
-		padding: 10px 18px;
-		background: var(--color-success-bg);
-		border: 1px solid var(--color-success-border);
-		border-radius: 8px;
-		color: var(--color-success-light) !important;
-		font-size: 14px;
-		font-weight: 500;
-		text-decoration: none !important;
-		transition: all 0.2s;
-	}
-
-	.support-link:hover {
-		background: rgba(106, 176, 76, 0.2);
-		border-color: rgba(106, 176, 76, 0.5);
-	}
-
 	/* AI-Built Section */
-	.ai-built.full-width {
-		grid-column: 1 / -1;
-	}
-
-	.ai-built.full-width .contribute-steps {
-		display: grid;
-		grid-template-columns: 1fr;
-	}
-
-	.ai-built.full-width .contribute-steps ol {
-		display: grid;
-		grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-		gap: 8px 24px;
-		padding-left: 24px;
-	}
-
 	.ai-built .contribute-steps {
 		background: var(--color-info-bg);
 		border: 1px solid var(--color-info-border);
@@ -880,10 +819,6 @@
 
 		.cards-grid {
 			grid-template-columns: 1fr;
-		}
-
-		.support-links {
-			flex-direction: column;
 		}
 	}
 </style>
