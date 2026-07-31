@@ -33,11 +33,22 @@ public sealed class ApiKeySeeder
             return;
         }
 
-        var seedKey = _config["ApiKey:SeedKey"];
-        var wasGenerated = string.IsNullOrWhiteSpace(seedKey);
-        if (wasGenerated)
+        // Written as two branches rather than a bool + reassignment so that
+        // seedKey is provably non-null afterwards: the compiler narrows on
+        // string.IsNullOrWhiteSpace directly ([NotNullWhen(false)]), but not on
+        // a bool holding its result.
+        var configuredKey = _config["ApiKey:SeedKey"];
+        string seedKey;
+        bool wasGenerated;
+        if (string.IsNullOrWhiteSpace(configuredKey))
         {
             seedKey = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+            wasGenerated = true;
+        }
+        else
+        {
+            seedKey = configuredKey;
+            wasGenerated = false;
         }
 
         var apiKey = new ApiKey
