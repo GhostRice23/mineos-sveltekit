@@ -29,6 +29,13 @@ jobs:
         run: go build ./...
       - name: Vet
         run: go vet ./...
+
+      # Goes beyond vet: the unused-code checks are what surfaced --remove-cli
+      # being a fully implemented flag that no code path ever reached.
+      - name: Staticcheck
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@v0.7.0
+          "$(go env GOPATH)/bin/staticcheck" ./...
       - name: Test (race)
         run: go test ./... -race
 

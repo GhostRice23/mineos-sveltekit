@@ -151,20 +151,43 @@ func runUninstall(cmd *cobra.Command, opts uninstallOptions) error {
 			fmt.Fprintf(out, "Warning: Failed to remove installation directory: %v\n", err)
 		}
 
+		maybeRemoveCLIFromPath(out, opts)
+
 		fmt.Fprintln(out, "")
 		fmt.Fprintln(out, "✓ Complete uninstall finished!")
-		fmt.Fprintln(out, "MineOS has been completely removed from your system.")
+		if opts.removeCLI {
+			fmt.Fprintln(out, "MineOS has been completely removed from your system.")
+		} else {
+			fmt.Fprintln(out, "MineOS has been removed. The mineos CLI itself is still")
+			fmt.Fprintln(out, "installed; re-run with --remove-cli to delete it too.")
+		}
 		return nil
 
 	default:
 		return fmt.Errorf("unknown uninstall mode: %s", mode)
 	}
 
+	maybeRemoveCLIFromPath(out, opts)
+
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, "Additional cleanup:")
 	fmt.Fprintln(out, "  - To remove Docker images: docker image prune -a")
 	fmt.Fprintln(out, "  - For complete uninstall: mineos uninstall --mode complete")
 	return nil
+}
+
+// maybeRemoveCLIFromPath honours --remove-cli. Deleting the binary is the last
+// thing an uninstall does and it is never implied by a mode, so the flag is the
+// only trigger. A failure here is reported but not returned: the containers and
+// data are already gone by this point, and failing the whole command over a
+// leftover binary would misrepresent what actually happened.
+func maybeRemoveCLIFromPath(out io.Writer, opts uninstallOptions) {
+	if !opts.removeCLI {
+		return
+	}
+	if err := removeCLIFromPath(out); err != nil {
+		fmt.Fprintf(out, "Warning: Failed to remove CLI from PATH: %v\n", err)
+	}
 }
 
 func resolveUninstallMode(cmd *cobra.Command, mode string) (string, error) {
@@ -434,31 +457,28 @@ func removeCLIFromPathWindows(out io.Writer) error {
 
 func removeCLIFromPathUnix(out io.Writer) error {
 	// Check both possible install locations
-	systemBin := "/usr/local/bin/mineos"
-	homeDir, _ := os.UserHomeDir()
-	userBin := ""
-	if homeDir != "" {
-		userBin = filepath.Join(homeDir, ".local", "bin", "mineos")
+	paths := []string{"/usr/local/bin/mineos"}
+	if homeDir, _ := os.UserHomeDir(); homeDir != "" {
+		paths = append(paths, filepath.Join(homeDir, ".local", "bin", "mineos"))
 	}
+	return removeCLIBinaries(out, paths)
+}
 
+// removeCLIBinaries deletes whichever of the candidate paths exist. It is split
+// out from removeCLIFromPathUnix so the deletion itself can be tested against a
+// temp dir -- calling the caller directly in a test would delete the developer's
+// own installed CLI.
+func removeCLIBinaries(out io.Writer, paths []string) error {
 	removed := false
-
-	if _, err := os.Stat(systemBin); err == nil {
-		if err := os.Remove(systemBin); err != nil {
-			return fmt.Errorf("failed to remove CLI from %s: %w", systemBin, err)
+	for _, path := range paths {
+		if _, err := os.Stat(path); err != nil {
+			continue
 		}
-		fmt.Fprintf(out, "✓ Removed CLI from: %s\n", systemBin)
+		if err := os.Remove(path); err != nil {
+			return fmt.Errorf("failed to remove CLI from %s: %w", path, err)
+		}
+		fmt.Fprintf(out, "✓ Removed CLI from: %s\n", path)
 		removed = true
-	}
-
-	if userBin != "" {
-		if _, err := os.Stat(userBin); err == nil {
-			if err := os.Remove(userBin); err != nil {
-				return fmt.Errorf("failed to remove CLI from %s: %w", userBin, err)
-			}
-			fmt.Fprintf(out, "✓ Removed CLI from: %s\n", userBin)
-			removed = true
-		}
 	}
 
 	if !removed {
