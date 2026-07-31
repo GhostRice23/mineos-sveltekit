@@ -31,3 +31,11 @@ jobs:
         run: go vet ./...
       - name: Test (race)
         run: go test ./... -race
+
+      # Checks the module graph against the Go vulnerability database and, unlike
+      # a plain dependency-age report, only fails on advisories whose vulnerable
+      # symbols this code actually reaches.
+      - name: Vulnerability scan
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          "$(go env GOPATH)/bin/govulncheck" ./...

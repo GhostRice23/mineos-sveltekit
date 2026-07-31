@@ -23,6 +23,12 @@ jobs:
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
       - run: npm ci
+      # Fails the build on a new high or critical advisory. Deliberately not
+      # --audit-level=low: three low findings are outstanding via a transitive
+      # `cookie` that only a prerelease SvelteKit would resolve, and gating on
+      # them would mean a permanently red build nobody can fix.
+      - name: Audit dependencies
+        run: npm audit --audit-level=high
       # svelte-check is the only thing that type-checks .svelte files —
       # `npm run build` passes even with type errors in them.
       - run: npm run check
