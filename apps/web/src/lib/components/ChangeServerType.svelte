@@ -19,7 +19,18 @@
 		onComplete: () => void;
 	} = $props();
 
-	type ServerType = 'vanilla' | 'paper' | 'spigot' | 'forge' | 'neoforge' | 'fabric' | 'quilt' | 'velocity';
+	type ServerType =
+		| 'vanilla'
+		| 'paper'
+		| 'spigot'
+		| 'forge'
+		| 'neoforge'
+		| 'fabric'
+		| 'quilt'
+		| 'velocity'
+		| 'arclight-forge'
+		| 'arclight-neoforge'
+		| 'arclight-fabric';
 
 	const serverTypes: { id: ServerType; name: string; category: string }[] = [
 		{ id: 'vanilla', name: 'Vanilla', category: 'vanilla' },
@@ -30,6 +41,11 @@
 		{ id: 'fabric', name: 'Fabric', category: 'mods' },
 		{ id: 'quilt', name: 'Quilt', category: 'mods' },
 		{ id: 'velocity', name: 'Velocity', category: 'proxy' },
+		// Arclight is a hybrid: a mod loader server that also runs Bukkit plugins.
+		// It sits under 'mods' because that is the silo it can be converted within.
+		{ id: 'arclight-forge', name: 'Arclight (Forge + Bukkit)', category: 'mods' },
+		{ id: 'arclight-neoforge', name: 'Arclight (NeoForge + Bukkit)', category: 'mods' },
+		{ id: 'arclight-fabric', name: 'Arclight (Fabric + Bukkit)', category: 'mods' },
 	];
 
 	// Detect current server category from jar name
@@ -80,6 +96,9 @@
 				case 'fabric': return p.group === 'fabric';
 				case 'quilt': return p.group === 'quilt';
 				case 'velocity': return p.group === 'velocity';
+				case 'arclight-forge': return p.group === 'arclight-forge';
+				case 'arclight-neoforge': return p.group === 'arclight-neoforge';
+				case 'arclight-fabric': return p.group === 'arclight-fabric';
 				// No 'bedrock' case: Bedrock is deliberately absent from
 				// ServerType — selectType() refuses to convert to or from it.
 				default: return false;
@@ -103,8 +122,12 @@
 		if (from === to) return null;
 		if (from === 'vanilla') return null; // Nothing to lose
 
-		if (from === 'plugins' && to === 'mods')
-			return 'Your existing plugins will not load on a modded server. Consider Mohist if you need both mods and plugins.';
+		if (from === 'plugins' && to === 'mods') {
+			// Arclight is the hybrid actually offered here, so point at it rather
+			// than at software this install cannot give you.
+			if (String(toType).startsWith('arclight-')) return null;
+			return 'Your existing plugins will not load on a plain modded server. Pick one of the Arclight options if you need mods and Bukkit plugins together.';
+		}
 		if (from === 'plugins' && to === 'vanilla')
 			return 'Your existing plugins will not load on a vanilla server.';
 		if (from === 'mods' && to === 'plugins')

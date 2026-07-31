@@ -29,6 +29,11 @@ public sealed class ProfileService : IProfileService
     private static readonly SemaphoreSlim PaperCacheLock = new(1, 1);
     private static DateTimeOffset? _paperLastFetch;
     private static List<ProfileDto> _paperCache = new();
+
+    private static readonly TimeSpan ArclightCacheTtl = TimeSpan.FromMinutes(30);
+    private static readonly SemaphoreSlim ArclightCacheLock = new(1, 1);
+    private static DateTimeOffset? _arclightLastFetch;
+    private static List<ProfileDto> _arclightCache = new();
     private static readonly TimeSpan VelocityCacheTtl = TimeSpan.FromMinutes(10);
     private static readonly SemaphoreSlim VelocityCacheLock = new(1, 1);
     private static DateTimeOffset? _velocityLastFetch;
@@ -107,6 +112,7 @@ public sealed class ProfileService : IProfileService
         var velocityProfiles = await GetVelocityProfilesAsync(cancellationToken);
         var buildToolsProfiles = await DiscoverBuildToolsProfilesAsync(cancellationToken);
         var bedrockProfiles = await GetBedrockProfilesAsync(cancellationToken);
+        var arclightProfiles = await GetArclightProfilesAsync(cancellationToken);
         var combined = new Dictionary<string, ProfileDto>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var profile in profiles)
@@ -146,6 +152,11 @@ public sealed class ProfileService : IProfileService
         }
 
         foreach (var profile in bedrockProfiles)
+        {
+            combined[profile.Id] = profile;
+        }
+
+        foreach (var profile in arclightProfiles)
         {
             combined[profile.Id] = profile;
         }
@@ -996,6 +1007,68 @@ public sealed class ProfileService : IProfileService
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to fetch vanilla profiles");
+            return Array.Empty<ProfileDto>();
+        }
+    }
+
+    /// <summary>
+    /// Arclight builds (Forge/NeoForge/Fabric + Bukkit hybrid), cached like the
+    /// other remote sources. The TTL is longer than Paper's: Arclight releases
+    /// every few weeks, not daily.
+    /// </summary>
+    private async Task<IReadOnlyList<ProfileDto>> GetArclightProfilesAsync(CancellationToken cancellationToken)
+    {
+        var now = DateTimeOffset.UtcNow;
+        if (_arclightLastFetch.HasValue &&
+            now - _arclightLastFetch.Value < ArclightCacheTtl &&
+            _arclightCache.Count > 0)
+        {
+            return _arclightCache;
+        }
+
+        await ArclightCacheLock.WaitAsync(cancellationToken);
+        try
+        {
+            if (_arclightLastFetch.HasValue &&
+                now - _arclightLastFetch.Value < ArclightCacheTtl &&
+                _arclightCache.Count > 0)
+            {
+                return _arclightCache;
+            }
+
+            var fetched = await FetchArclightProfilesAsync(cancellationToken);
+            if (fetched.Count > 0)
+            {
+                _arclightCache = fetched.ToList();
+                _arclightLastFetch = DateTimeOffset.UtcNow;
+            }
+            else if (_arclightCache.Count == 0)
+            {
+                // Record the attempt so a persistently failing source is not
+                // retried on every single profile listing.
+                _arclightLastFetch = DateTimeOffset.UtcNow;
+            }
+
+            return _arclightCache;
+        }
+        finally
+        {
+            ArclightCacheLock.Release();
+        }
+    }
+
+    private async Task<IReadOnlyList<ProfileDto>> FetchArclightProfilesAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var json = await _httpClient.GetStringAsync(ArclightProfileSource.ReleasesUrl, cancellationToken);
+            var builds = ArclightProfileSource.ParseReleases(json);
+            return ArclightProfileSource.ToProfiles(builds);
+        }
+        catch (Exception ex)
+        {
+            // One unreachable source must not take the whole profile list down.
+            _logger.LogWarning(ex, "Failed to fetch Arclight profiles");
             return Array.Empty<ProfileDto>();
         }
     }
