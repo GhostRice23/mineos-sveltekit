@@ -34,7 +34,8 @@ public sealed class ApiKeySeeder
         }
 
         var seedKey = _config["ApiKey:SeedKey"];
-        if (string.IsNullOrWhiteSpace(seedKey))
+        var wasGenerated = string.IsNullOrWhiteSpace(seedKey);
+        if (wasGenerated)
         {
             seedKey = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
         }
@@ -52,6 +53,26 @@ public sealed class ApiKeySeeder
         _db.ApiKeys.Add(apiKey);
         await _db.SaveChangesAsync(cancellationToken);
 
-        _logger.LogInformation("Seeded API key: {ApiKey}", apiKey.Key);
+        // This key carries ["*"], and a valid API key is admin identity, so the
+        // value is not written to the log in the normal case: the operator
+        // supplied ApiKey:SeedKey (the CLI installer puts it in .env) and
+        // already has it. Logging it again only copies an admin credential into
+        // wherever logs are shipped and retained.
+        //
+        // The generated fallback is the exception. Nothing else ever displays
+        // that value, so withholding it would leave an unusable install; it is
+        // logged once, as a warning, saying so.
+        if (wasGenerated)
+        {
+            _logger.LogWarning(
+                "No ApiKey:SeedKey was configured, so one was generated: {ApiKey}. " +
+                "This is the only time it is shown. Store it somewhere safe, and " +
+                "treat this log entry as a secret until you rotate the key.",
+                apiKey.Key);
+        }
+        else
+        {
+            _logger.LogInformation("Seeded the configured API key.");
+        }
     }
 }
