@@ -29,7 +29,16 @@ wss.on('error', (err) => {
 	console.error('[WS Proxy] Server error:', err.message);
 });
 
-server.on('upgrade', createUpgradeHandler({ wss, wsBase: WS_BASE, apiKey: API_KEY }));
+server.on(
+	'upgrade',
+	createUpgradeHandler({
+		wss,
+		wsBase: WS_BASE,
+		apiKey: API_KEY,
+		// Same fallback origin hooks.server.ts honours for HTTP CSRF.
+		configuredOrigin: process.env.ORIGIN || null
+	})
+);
 
 // Start server
 server.listen(PORT, HOST, () => {

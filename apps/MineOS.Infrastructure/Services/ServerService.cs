@@ -6,6 +6,7 @@ using MineOS.Application.Dtos;
 using MineOS.Application.Interfaces;
 using MineOS.Application.Options;
 using MineOS.Domain.Entities;
+using MineOS.Domain.ValueObjects;
 using MineOS.Infrastructure.Utilities;
 using ServerStatusStrings = MineOS.Infrastructure.Constants.ServerStatus;
 using Tomlyn;
@@ -132,10 +133,6 @@ public class ServerService : IServerService
         );
     }
 
-    private static readonly System.Text.RegularExpressions.Regex SafeServerNameRegex = new(
-        @"^[a-zA-Z0-9][a-zA-Z0-9 _\-\.]{0,63}$",
-        System.Text.RegularExpressions.RegexOptions.Compiled);
-
     public async Task<ServerDetailDto> CreateServerAsync(
         CreateServerRequest request,
         string username,
@@ -144,11 +141,11 @@ public class ServerService : IServerService
         if (string.IsNullOrWhiteSpace(request.Name))
             throw new ArgumentException("Server name is required");
 
-        if (!SafeServerNameRegex.IsMatch(request.Name))
+        // The rules moved to Domain.ValueObjects.ServerName so that the request
+        // path can apply the traversal half of them to every server-scoped call,
+        // not just to creation. See ServerAccessFilter.
+        if (!ServerName.IsWellFormed(request.Name))
             throw new ArgumentException("Server name contains invalid characters. Use letters, numbers, spaces, hyphens, underscores, or dots.");
-
-        if (request.Name.Contains(".."))
-            throw new ArgumentException("Server name cannot contain '..'");
 
         var serverPath = GetServerPath(request.Name);
         var backupPath = GetBackupPath(request.Name);
