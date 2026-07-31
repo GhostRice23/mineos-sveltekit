@@ -35,7 +35,15 @@ jobs:
       # Checks the module graph against the Go vulnerability database and, unlike
       # a plain dependency-age report, only fails on advisories whose vulnerable
       # symbols this code actually reaches.
+      #
+      # Most hits here are standard-library advisories, which are fixed by the
+      # compiler rather than by a dependency: bump the `go` directive in
+      # tools/mineos-cli/go.mod to the patch release the report names under
+      # "Fixed in", since setup-go and the release workflow both read the
+      # toolchain from that one line. The tool itself is pinned so a new
+      # govulncheck release cannot change the verdict on its own — the advisory
+      # database is fetched at run time and stays current regardless.
       - name: Vulnerability scan
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
+          go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
           "$(go env GOPATH)/bin/govulncheck" ./...

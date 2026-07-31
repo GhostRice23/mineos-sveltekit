@@ -1922,7 +1922,7 @@
 		color: #d0e0e8 !important;
 	}
 
-	:global([data-theme='retro']) .topbar {
+	:global([data-theme='retro'] .topbar) {
 		background: #3d6073 !important;
 		border-bottom: 2px solid #55859f;
 	}
