@@ -117,9 +117,12 @@ public class ArclightProfileSourceTests
     {
         var builds = ArclightProfileSource.ParseReleases(ReleasesJson);
 
+        // Distinct: two stable releases both ship a fabric build for 1.21.1, so
+        // the raw build list legitimately contains it twice.
         var loaders = builds
             .Where(b => b.MinecraftVersion == "1.21.1")
             .Select(b => b.Loader)
+            .Distinct()
             .OrderBy(l => l)
             .ToArray();
 
