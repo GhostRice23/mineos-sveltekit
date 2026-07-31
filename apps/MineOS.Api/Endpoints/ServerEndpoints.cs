@@ -191,13 +191,17 @@ public static class ServerEndpoints
                     await serverService.StopServerAsync(server.Name, timeout, cancellationToken);
                     return new { name = server.Name, status = "stopped", error = (string?)null };
                 }
+                // The (string?) casts keep all three branches on one anonymous
+                // type. Without them the success branch yields `string? error`
+                // and these yield `string error`, which the compiler unifies
+                // while warning about the nullability mismatch.
                 catch (TimeoutException ex)
                 {
-                    return new { name = server.Name, status = "timeout", error = ex.Message };
+                    return new { name = server.Name, status = "timeout", error = (string?)ex.Message };
                 }
                 catch (Exception ex)
                 {
-                    return new { name = server.Name, status = "error", error = ex.Message };
+                    return new { name = server.Name, status = "error", error = (string?)ex.Message };
                 }
             }));
 

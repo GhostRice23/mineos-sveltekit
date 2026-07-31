@@ -382,8 +382,8 @@ public sealed class WorldService : IWorldService
             File.Delete(tempZipFile);
 
             // Find the world folder (must contain level.dat)
-            string worldFolderPath = null;
-            string worldName = null;
+            string? worldFolderPath = null;
+            string? worldName = null;
 
             var extractedDirs = Directory.GetDirectories(tempDir);
             if (extractedDirs.Length == 1)
@@ -404,7 +404,10 @@ public sealed class WorldService : IWorldService
                 worldName = "world"; // Default name
             }
 
-            if (worldFolderPath == null)
+            // Both are set together on every path that finds a world, but the
+            // compiler cannot see that coupling — checking both makes the
+            // invariant explicit and keeps worldName non-null below.
+            if (worldFolderPath == null || worldName == null)
             {
                 throw new ArgumentException("ZIP file does not contain a valid Minecraft world (no level.dat found)");
             }

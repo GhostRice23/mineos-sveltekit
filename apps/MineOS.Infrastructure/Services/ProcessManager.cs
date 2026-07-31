@@ -40,6 +40,10 @@ public partial class ProcessManager : IProcessManager
         var pids = Directory.GetDirectories(PROC_PATH)
             .Select(Path.GetFileName)
             .Where(name => !string.IsNullOrWhiteSpace(name) && int.TryParse(name, out _))
+            // The Where already excludes null, but that does not flow through to
+            // the element type; state it so Path.Combine below is not passed a
+            // possibly-null argument.
+            .Select(name => name!)
             .ToList();
 
         foreach (var pidStr in pids)
