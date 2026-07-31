@@ -237,7 +237,9 @@
 				return;
 			}
 
-			// Profile-based install (vanilla, paper, bedrock)
+			// Profile-based install (vanilla, paper, bedrock, velocity, arclight):
+			// the profile already points at a ready-to-run jar, so there is no
+			// separate installer step.
 			simpleStepText = 'Downloading and configuring...';
 			simpleProgress = 20;
 
