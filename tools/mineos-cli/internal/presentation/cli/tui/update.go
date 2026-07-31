@@ -541,9 +541,16 @@ func (m TuiModel) handleActionResult(msg ActionResultMsg) (tea.Model, tea.Cmd) {
 	}
 	if msg.Err != nil {
 		m.ErrMsg = msg.Err.Error()
-	} else {
-		m.StatusMsg = msg.Message
-		m.ErrMsg = "" // Clear error on success
+		return m, nil
+	}
+
+	m.StatusMsg = msg.Message
+	m.ErrMsg = "" // Clear error on success
+
+	// A server action changes the state the table shows; refresh it now rather
+	// than leaving stale rows until the next 10s poll.
+	if m.ConfigReady {
+		return m, m.LoadServersCmd()
 	}
 	return m, nil
 }

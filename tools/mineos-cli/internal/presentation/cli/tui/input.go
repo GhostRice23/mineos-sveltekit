@@ -354,7 +354,9 @@ func (m TuiModel) executeServerAction() (tea.Model, tea.Cmd) {
 	if action.Destructive {
 		menuItem := &MenuItem{
 			Label:       action.Label,
-			Args:        []string{"servers", serverName, string(action.Action)},
+			Kind:        MenuKindServerAction,
+			Server:      serverName,
+			ServerAct:   action.Action,
 			Destructive: true,
 		}
 		m.ConfirmAction = menuItem
@@ -363,17 +365,10 @@ func (m TuiModel) executeServerAction() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Execute the server action
-	m.PreviousView = m.CurrentView
-	m.CurrentView = ViewOutput
-	m.OutputTitle = action.Label + ": " + serverName
-	m.OutputLines = []string{"Executing " + action.Label + " on " + serverName + "..."}
-
-	menuItem := MenuItem{
-		Label: action.Label,
-		Args:  []string{"servers", serverName, string(action.Action)},
-	}
-	return m, m.ExecMenuItem(menuItem)
+	// Execute the server action in-process. No view switch: the result lands
+	// on the footer (which expires it) and the table refreshes, instead of
+	// dumping subprocess stdout into an output pane the user has to Esc out of.
+	return m, m.ServerActionCmd(serverName, action.Action, action.Label)
 }
 
 // navBack handles Esc key - goes back to previous view or exits
@@ -434,7 +429,7 @@ func (m TuiModel) executeNavAction(item NavItem) (tea.Model, tea.Cmd) {
 		Interactive: item.Action.Interactive,
 		Streaming:   item.Action.Streaming,
 	}
-	return m, m.ExecMenuItem(menuItem)
+	return m, m.RunMenuItem(menuItem)
 }
 
 // HandleCommandInput handles input when in command mode
@@ -511,7 +506,7 @@ func (m TuiModel) HandleConfirmInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.OutputTitle = action.Label
 			m.OutputLines = []string{"Executing " + action.Label + "..."}
 
-			return m, m.ExecMenuItem(*action)
+			return m, m.RunMenuItem(*action)
 		}
 		m.Mode = ModeNormal
 		return m, nil
@@ -531,7 +526,7 @@ func (m TuiModel) HandleConfirmInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.OutputTitle = action.Label
 			m.OutputLines = []string{"Executing " + action.Label + "..."}
 
-			return m, m.ExecMenuItem(*action)
+			return m, m.RunMenuItem(*action)
 		}
 		return m, nil
 

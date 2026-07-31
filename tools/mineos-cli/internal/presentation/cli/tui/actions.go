@@ -2,6 +2,7 @@ package tui
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -11,6 +12,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/freemancraft/mineos-sveltekit/tools/mineos-cli/internal/application/usecases"
 	"github.com/freemancraft/mineos-sveltekit/tools/mineos-cli/internal/infrastructure/env"
 )
 
@@ -27,6 +29,41 @@ func (m TuiModel) ConsoleCommandCmd(command string) tea.Cmd {
 			Message: fmt.Sprintf("sent to %s: %s", server, command),
 			Err:     err,
 		}
+	}
+}
+
+// RunMenuItem executes a menu item by whichever path its kind calls for.
+//
+// One entry point for both execution strategies, so callers no longer decide
+// between them: in-process for anything the API can do, a subprocess only for
+// docker compose orchestration and the genuinely interactive commands.
+func (m TuiModel) RunMenuItem(item MenuItem) tea.Cmd {
+	if item.Kind == MenuKindServerAction {
+		return m.ServerActionCmd(item.Server, item.ServerAct, item.Label)
+	}
+	return m.ExecMenuItem(item)
+}
+
+// ServerActionCmd performs a server action against the API in this process.
+func (m TuiModel) ServerActionCmd(server string, action ServerAction, label string) tea.Cmd {
+	if server == "" {
+		return func() tea.Msg { return ActionResultMsg{Err: errors.New("select a server first")} }
+	}
+	client := m.Client
+	if client == nil || !m.ConfigReady {
+		return func() tea.Msg { return ActionResultMsg{Err: errors.New("API not connected")} }
+	}
+
+	ctx := m.Ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	return func() tea.Msg {
+		if err := usecases.NewServerActionUseCase(client).Execute(ctx, server, string(action)); err != nil {
+			return ActionResultMsg{Err: err}
+		}
+		return ActionResultMsg{Message: fmt.Sprintf("%s: %s", label, server)}
 	}
 }
 

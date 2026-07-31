@@ -186,10 +186,18 @@ type TuiModel struct {
 type MenuKind int
 
 const (
-	// MenuKindCommand runs `mineos <Args...>`.
+	// MenuKindCommand runs `mineos <Args...>` as a subprocess. Kept for the
+	// stack and system actions, which drive docker compose or need a real
+	// terminal (install/reconfigure/uninstall).
 	MenuKindCommand MenuKind = iota
 	// MenuKindConsole opens the console prompt instead of running anything.
 	MenuKindConsole
+	// MenuKindServerAction calls the API in-process. Server start/stop/restart/
+	// kill used to re-execute the mineos binary just to have it call the same
+	// endpoint this process could call directly — which spawned a subprocess
+	// per click, depended on os.Executable() resolving, and turned typed API
+	// errors into scraped stdout.
+	MenuKindServerAction
 )
 
 // StackEffect is what an action does to the containers.
@@ -208,10 +216,16 @@ const (
 
 // MenuItem represents an item in the command menu
 type MenuItem struct {
-	Label       string
-	Args        []string
-	Kind        MenuKind
-	Effect      StackEffect
+	Label  string
+	Args   []string
+	Kind   MenuKind
+	Effect StackEffect
+
+	// Server and ServerAct carry the target of a MenuKindServerAction, so the
+	// confirmation dialog can run it without re-deriving it from Args.
+	Server    string
+	ServerAct ServerAction
+
 	Destructive bool // If true, requires confirmation
 	Interactive bool // If true, requires user input (use tea.ExecProcess)
 	Streaming   bool // If true, stream output in real-time (for long-running commands)
