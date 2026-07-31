@@ -13,6 +13,8 @@
 		pulse?: boolean;
 		/** Additional CSS classes */
 		class?: string;
+		/** Badge label. Svelte 5 renders children through a snippet, not <slot>. */
+		children?: import('svelte').Snippet;
 	}
 
 	let {
@@ -20,7 +22,8 @@
 		size = 'md',
 		dot = false,
 		pulse = false,
-		class: className = ''
+		class: className = '',
+		children
 	}: Props = $props();
 </script>
 
@@ -34,7 +37,7 @@
 		class="status-badge {variant} {size} {className}"
 		class:pulse
 	>
-		<slot />
+		{@render children?.()}
 	</span>
 {/if}
 

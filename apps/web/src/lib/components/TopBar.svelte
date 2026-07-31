@@ -348,10 +348,18 @@
 		</button>
 	{/if}
 	<div class="topbar-search">
+		<!-- Combobox wiring: arrow keys already moved focusedIndex, but nothing
+		     announced it. aria-activedescendant is what lets a screen reader
+		     follow the highlighted option while focus stays in the input. -->
 		<input
 			bind:this={searchInput}
 			type="text"
 			placeholder="Search servers, profiles..."
+			role="combobox"
+			aria-expanded={showResults}
+			aria-controls="topbar-search-results"
+			aria-autocomplete="list"
+			aria-activedescendant={focusedKey ? `topbar-search-opt-${focusedKey}` : undefined}
 			bind:value={query}
 			onfocus={handleSearchFocus}
 			onblur={handleSearchBlur}
@@ -366,7 +374,12 @@
 		</span>
 
 		{#if showResults}
-			<div class="search-results" role="listbox" aria-label="Search results">
+			<div
+				class="search-results"
+				id="topbar-search-results"
+				role="listbox"
+				aria-label="Search results"
+			>
 				<div class="search-filters" role="tablist" aria-label="Search filters">
 					<button
 						class="filter-btn"
@@ -426,9 +439,17 @@
 							<div
 								class="result-item"
 								class:focused={focusedKey === result.key}
+								id="topbar-search-opt-{result.key}"
 								role="option"
+								tabindex="-1"
 								aria-selected={focusedKey === result.key}
 								onclick={() => handleResultSelect(result)}
+								onkeydown={(e) => {
+									if (e.key === 'Enter' || e.key === ' ') {
+										e.preventDefault();
+										handleResultSelect(result);
+									}
+								}}
 							>
 								<div class="result-main">
 									<div class="result-title">
@@ -483,9 +504,17 @@
 							<div
 								class="result-item"
 								class:focused={focusedKey === result.key}
+								id="topbar-search-opt-{result.key}"
 								role="option"
+								tabindex="-1"
 								aria-selected={focusedKey === result.key}
 								onclick={() => handleResultSelect(result)}
+								onkeydown={(e) => {
+									if (e.key === 'Enter' || e.key === ' ') {
+										e.preventDefault();
+										handleResultSelect(result);
+									}
+								}}
 							>
 								<div class="result-main">
 									<div class="result-title">

@@ -657,9 +657,14 @@
 		<span class="section-subtitle">Upload archives and unpack them in the background</span>
 	</div>
 
+	<!-- Drag and drop is a pointer-only enhancement; the file input below is the
+	     keyboard-accessible equivalent, so this is a labelled region rather than
+	     something pretending to be operable. -->
 	<div
 		class="upload-zone"
 		class:active={dragActive}
+		role="region"
+		aria-label="Drop server archives here to upload"
 		ondragover={(event) => {
 			event.preventDefault();
 			dragActive = true;

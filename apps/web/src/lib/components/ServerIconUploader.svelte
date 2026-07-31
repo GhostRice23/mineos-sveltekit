@@ -341,7 +341,7 @@
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<div class="crop-backdrop" onclick={cancelCrop} onkeydown={(e) => e.key === 'Escape' && cancelCrop()}>
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
-		<div class="crop-modal" onclick={(e) => e.stopPropagation()}>
+		<div class="crop-modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" tabindex="-1">
 			<h3>Crop Server Icon</h3>
 			<p class="crop-hint">Drag to position, scroll to zoom. Icon will be saved as 64x64.</p>
 

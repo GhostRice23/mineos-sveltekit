@@ -409,11 +409,22 @@
 					</div>
 				{:else}
 					{#each activeNotifications as notification (notification.id)}
+						<!-- Not a <button>: the row contains its own action buttons, and
+						     nesting them would be invalid. Role plus keydown makes
+						     mark-as-read reachable without a mouse. -->
 						<div
 							class="notification-item"
 							class:unread={!notification.isRead}
 							class:dismissed={!!notification.dismissedAt}
+							role="button"
+							tabindex="0"
 							onclick={() => !notification.isRead && markAsRead(notification.id)}
+							onkeydown={(e) => {
+								if (e.key === 'Enter' || e.key === ' ') {
+									e.preventDefault();
+									if (!notification.isRead) markAsRead(notification.id);
+								}
+							}}
 						>
 							<div class="notification-icon" style="color: {getColorForType(notification.type)}">
 								{getIconForType(notification.type)}
