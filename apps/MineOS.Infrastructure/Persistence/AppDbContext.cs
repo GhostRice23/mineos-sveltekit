@@ -76,8 +76,11 @@ public sealed class AppDbContext : DbContext
         modelBuilder.Entity<ApiKey>(entity =>
         {
             entity.HasKey(x => x.Id);
-            entity.HasIndex(x => x.Key).IsUnique();
-            entity.Property(x => x.Key).IsRequired();
+            // Authentication looks a key up by hash, so that is the column that
+            // needs the unique index. Key is legacy plaintext, nullable, and on
+            // its way out; it keeps no index. SQLite allows repeated NULLs in a
+            // unique index, so the cleared rows do not collide.
+            entity.HasIndex(x => x.KeyHash).IsUnique();
             entity.Property(x => x.Name).HasMaxLength(128);
             entity.Property(x => x.UserId);
         });

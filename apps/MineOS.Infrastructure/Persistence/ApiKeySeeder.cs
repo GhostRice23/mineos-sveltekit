@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using MineOS.Domain.Entities;
+using MineOS.Infrastructure.Services;
 
 namespace MineOS.Infrastructure.Persistence;
 
@@ -54,7 +55,7 @@ public sealed class ApiKeySeeder
         var apiKey = new ApiKey
         {
             UserId = 1, // Will be associated with first user
-            Key = seedKey.Trim(),
+            KeyHash = ApiKeyHasher.Hash(seedKey.Trim()),
             Name = "default",
             Permissions = """["*"]""", // Full permissions
             CreatedAt = DateTimeOffset.UtcNow,
@@ -79,7 +80,7 @@ public sealed class ApiKeySeeder
                 "No ApiKey:SeedKey was configured, so one was generated: {ApiKey}. " +
                 "This is the only time it is shown. Store it somewhere safe, and " +
                 "treat this log entry as a secret until you rotate the key.",
-                apiKey.Key);
+                seedKey);
         }
         else
         {

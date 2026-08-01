@@ -4,7 +4,22 @@ public sealed class ApiKey
 {
     public int Id { get; set; }
     public int UserId { get; set; }
-    public required string Key { get; set; }
+
+    /// <summary>
+    /// Legacy plaintext key. Only ever non-null on a row written before keys
+    /// were hashed; ApiKeyHashUpgrader fills <see cref="KeyHash"/> from it at
+    /// startup and then clears it. Nothing reads it for authentication.
+    /// Dropping the column is a follow-up migration, once no deployment can
+    /// still be carrying un-upgraded rows.
+    /// </summary>
+    public string? Key { get; set; }
+
+    /// <summary>
+    /// SHA-256 of the key, lowercase hex. Null only on a legacy row that has
+    /// not been upgraded yet.
+    /// </summary>
+    public string? KeyHash { get; set; }
+
     public required string Name { get; set; }
     public required string Permissions { get; set; } // JSON array of permissions
     public DateTimeOffset CreatedAt { get; set; }
