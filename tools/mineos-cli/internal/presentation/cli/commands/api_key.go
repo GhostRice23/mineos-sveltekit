@@ -21,17 +21,22 @@ func NewApiKeyCommand(loadConfig *usecases.LoadConfigUseCase) *cobra.Command {
 func NewApiKeyRefreshCommand(loadConfig *usecases.LoadConfigUseCase) *cobra.Command {
 	return &cobra.Command{
 		Use:   "refresh",
-		Short: "Refresh MINEOS_API_KEY from the local sqlite database",
+		Short: "Rewrite MINEOS_API_KEY from the key material in .env",
+		Long: "Rebuilds MINEOS_API_KEY from ApiKey__StaticKey or ApiKey__SeedKey in the\n" +
+			"same .env file.\n\n" +
+			"This used to read the key out of the sqlite database. The API stores only a\n" +
+			"SHA-256 of each key now, so there is nothing there to read back -- a key that\n" +
+			"is not in .env has to be reissued rather than recovered.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := loadConfig.Execute(cmd.Context())
 			if err != nil {
 				return err
 			}
-			key, err := refreshApiKeyFromDb(cfg)
+			key, source, err := refreshApiKeyFromEnv(cfg)
 			if err != nil {
 				return err
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), "API key refreshed from local database.")
+			fmt.Fprintf(cmd.OutOrStdout(), "MINEOS_API_KEY rewritten from %s.\n", source)
 			fmt.Fprintf(cmd.OutOrStdout(), "MINEOS_API_KEY: %s\n", mask(key))
 			return nil
 		},

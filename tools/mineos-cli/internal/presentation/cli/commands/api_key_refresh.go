@@ -1,69 +1,48 @@
 package commands
 
 import (
-	"context"
-	"database/sql"
 	"errors"
-	"fmt"
 	"path/filepath"
 	"strings"
-	"time"
-
-	_ "modernc.org/sqlite"
 
 	"github.com/freemancraft/mineos-sveltekit/tools/mineos-cli/internal/domain/config"
 )
 
-var errNoApiKeyFound = errors.New("no active API key found in database")
+// errNoApiKeySource is returned when .env carries nothing the management key
+// can be rebuilt from. There is deliberately no fallback to the database: the
+// API stores only a SHA-256 of each key, so a key that is not in .env is not
+// recoverable from anywhere, by design.
+var errNoApiKeySource = errors.New(
+	"no API key found in .env to refresh from.\n" +
+		"MINEOS_API_KEY is rebuilt from ApiKey__StaticKey or ApiKey__SeedKey in the same file.\n" +
+		"The database cannot help: keys are stored hashed, so the value cannot be read back.\n" +
+		"Set ApiKey__StaticKey in .env and restart, or issue a new key from the web UI")
 
-func refreshApiKeyFromDb(cfg config.Config) (string, error) {
-	if !isSqliteConfig(cfg) {
-		return "", errors.New("API key refresh is only supported for sqlite installations")
+// refreshApiKeyFromEnv rewrites MINEOS_API_KEY from the key material already in
+// .env and reports which entry it used.
+//
+// This used to read `SELECT Key FROM ApiKeys` out of the sqlite database. That
+// worked only because the API stored keys in plaintext; now that it stores a
+// hash, the query would return a hash, and writing that into MINEOS_API_KEY
+// would produce a CLI that fails to authenticate with no obvious reason why.
+func refreshApiKeyFromEnv(cfg config.Config) (key string, source string, err error) {
+	// Static first, matching config.EffectiveApiKey's precedence: a static key
+	// is accepted by the API without touching the database at all, so it is the
+	// more reliable of the two.
+	if key = strings.TrimSpace(cfg.ApiKeyStatic); key != "" {
+		source = "ApiKey__StaticKey"
+	} else if key = strings.TrimSpace(cfg.ApiKeySeed); key != "" {
+		source = "ApiKey__SeedKey"
+	} else {
+		return "", "", errNoApiKeySource
 	}
 
 	envPath := resolveEnvPath(cfg.EnvPath)
-	dataDir := resolveDataDir(cfg, envPath)
-	dbPath, err := resolveSqliteDbPath(cfg, dataDir)
-	if err != nil {
-		return "", err
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		return "", err
-	}
-	defer db.Close()
-
-	var key string
-	row := db.QueryRowContext(ctx, "SELECT Key FROM ApiKeys WHERE Revoked=0 ORDER BY CreatedAt DESC LIMIT 1")
-	if err := row.Scan(&key); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return "", errNoApiKeyFound
-		}
-		return "", err
-	}
-
-	key = strings.TrimSpace(key)
-	if key == "" {
-		return "", errNoApiKeyFound
-	}
-
 	if err := setEnvFileValue(envPath, "MINEOS_API_KEY", key); err != nil {
-		return "", err
+		return "", "", err
 	}
 
-	return key, nil
-}
-
-func isSqliteConfig(cfg config.Config) bool {
-	dbType := strings.TrimSpace(cfg.DatabaseType)
-	if dbType == "" {
-		return true
-	}
-	return strings.EqualFold(dbType, "sqlite")
+	return key, source, nil
 }
 
 func resolveEnvPath(path string) string {
@@ -80,53 +59,4 @@ func resolveEnvPath(path string) string {
 		return envPath
 	}
 	return abs
-}
-
-func resolveDataDir(cfg config.Config, envPath string) string {
-	dataDir := strings.TrimSpace(cfg.DataDirectory)
-	if dataDir == "" {
-		dataDir = "./data"
-	}
-	if filepath.IsAbs(dataDir) {
-		return filepath.Clean(dataDir)
-	}
-	envDir := filepath.Dir(envPath)
-	return filepath.Clean(filepath.Join(envDir, dataDir))
-}
-
-func resolveSqliteDbPath(cfg config.Config, dataDir string) (string, error) {
-	dbPath := filepath.Join(dataDir, "mineos.db")
-	if source := parseDataSource(cfg.DatabaseConnection); source != "" {
-		switch {
-		case strings.HasPrefix(source, "/app/data/"):
-			dbPath = filepath.Join(dataDir, filepath.Base(source))
-		case filepath.IsAbs(source):
-			dbPath = source
-		default:
-			dbPath = filepath.Join(dataDir, source)
-		}
-	}
-
-	if !fileExists(dbPath) {
-		return "", fmt.Errorf("sqlite database not found at %s", dbPath)
-	}
-	return dbPath, nil
-}
-
-func parseDataSource(conn string) string {
-	for _, part := range strings.Split(conn, ";") {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		key, value, found := strings.Cut(part, "=")
-		if !found {
-			continue
-		}
-		switch strings.ToLower(strings.TrimSpace(key)) {
-		case "data source", "datasource":
-			return strings.TrimSpace(value)
-		}
-	}
-	return ""
 }

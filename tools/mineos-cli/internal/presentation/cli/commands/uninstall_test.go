@@ -2,6 +2,7 @@ package commands
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,11 +14,11 @@ import (
 // surfaced it was staticcheck reporting removeCLIFromPath as unused, which is
 // why that check now runs in CI.
 //
-// Note that staticcheck will not catch a second regression of exactly this
-// shape: these tests reference the removal helpers, so the functions count as
-// used even if the uninstall flow stops calling them. The tests below cover the
-// deletion logic and the flag's registration -- the call site itself is only as
-// safe as review.
+// Staticcheck alone cannot catch a second regression of this shape, though:
+// these tests reference the removal helpers, so the functions count as used
+// even if the uninstall flow stops calling them. That is what the call-site
+// tests at the bottom of this file are for -- they drive runUninstall itself,
+// and deleting either maybeRemoveCLIFromPath call turns them red.
 
 func TestUninstallRegistersTheRemoveCLIFlag(t *testing.T) {
 	cmd := NewUninstallCommand()
@@ -99,5 +100,109 @@ func TestRemoveCLIBinariesReportsWhenNothingIsInstalled(t *testing.T) {
 
 	if !strings.Contains(out.String(), "CLI not found") {
 		t.Errorf("expected a 'not found' note, got: %q", out.String())
+	}
+}
+
+// The tests above cover the deletion logic. These cover the call site, which is
+// what actually regressed: --remove-cli was declared, bound, and never read.
+// They drive runUninstall itself, with docker, compose and the remover all
+// stubbed, so removing the maybeRemoveCLIFromPath call turns them red.
+
+func stubUninstallDeps(t *testing.T) *bool {
+	t.Helper()
+	called := false
+
+	origLookPath, origDetector, origRemover := dockerLookPath, composeDetector, cliPathRemover
+	origData, origInstallDir := localDataRemover, installDirRemover
+	t.Cleanup(func() {
+		dockerLookPath, composeDetector, cliPathRemover = origLookPath, origDetector, origRemover
+		localDataRemover, installDirRemover = origData, origInstallDir
+	})
+
+	dockerLookPath = func() error { return nil }
+	composeDetector = func() (composeRunner, error) {
+		return composeRunner{
+			exe:  "docker",
+			exec: func(_ string, _ []string, _ []string) error { return nil },
+		}, nil
+	}
+	cliPathRemover = func(io.Writer) error {
+		called = true
+		return nil
+	}
+	localDataRemover = func(io.Writer) error { return nil }
+	installDirRemover = func(io.Writer) error { return nil }
+
+	// reportUninstallTelemetry reads ./.env; an empty dir makes it a no-op.
+	t.Chdir(t.TempDir())
+	return &called
+}
+
+func runUninstallForTest(t *testing.T, opts uninstallOptions) (string, error) {
+	t.Helper()
+	var out bytes.Buffer
+	cmd := NewUninstallCommand()
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	err := runUninstall(cmd, opts)
+	return out.String(), err
+}
+
+func TestUninstallRemovesTheCLIWhenTheFlagIsSet(t *testing.T) {
+	called := stubUninstallDeps(t)
+
+	if _, err := runUninstallForTest(t, uninstallOptions{mode: "containers", removeCLI: true}); err != nil {
+		t.Fatalf("runUninstall: %v", err)
+	}
+
+	if !*called {
+		t.Fatal("--remove-cli was set but the uninstall never removed the CLI")
+	}
+}
+
+func TestUninstallLeavesTheCLIAloneWithoutTheFlag(t *testing.T) {
+	called := stubUninstallDeps(t)
+
+	if _, err := runUninstallForTest(t, uninstallOptions{mode: "containers"}); err != nil {
+		t.Fatalf("runUninstall: %v", err)
+	}
+
+	if *called {
+		t.Fatal("the CLI was removed even though --remove-cli was not set")
+	}
+}
+
+func TestCompleteUninstallAlsoHonoursTheFlag(t *testing.T) {
+	// "complete" returns early on its own path, so it needs its own call.
+	called := stubUninstallDeps(t)
+
+	out, err := runUninstallForTest(t, uninstallOptions{mode: "complete", skipConfirm: true, removeCLI: true})
+	if err != nil {
+		t.Fatalf("runUninstall: %v", err)
+	}
+
+	if !*called {
+		t.Fatal("--remove-cli was set but the complete uninstall never removed the CLI")
+	}
+	if !strings.Contains(out, "completely removed from your system") {
+		t.Errorf("complete uninstall should claim a full removal once the CLI is gone, got: %q", out)
+	}
+}
+
+func TestCompleteUninstallSaysTheCLIRemains(t *testing.T) {
+	// Without the flag the binary stays, so the closing message must not claim
+	// MineOS was completely removed.
+	stubUninstallDeps(t)
+
+	out, err := runUninstallForTest(t, uninstallOptions{mode: "complete", skipConfirm: true})
+	if err != nil {
+		t.Fatalf("runUninstall: %v", err)
+	}
+
+	if strings.Contains(out, "completely removed from your system") {
+		t.Errorf("the CLI is still installed, so this must not claim a full removal: %q", out)
+	}
+	if !strings.Contains(out, "--remove-cli") {
+		t.Errorf("output should point at --remove-cli, got: %q", out)
 	}
 }

@@ -36,6 +36,19 @@ type uninstallOptions struct {
 
 var errUninstallCancelled = errors.New("uninstall cancelled")
 
+// Indirections so the uninstall flow itself can be exercised without docker
+// installed and without deleting the developer's own CLI. Same idea as
+// composeRunner.exec below. Overridden only by uninstall_test.go.
+var (
+	dockerLookPath   = func() error { _, err := exec.LookPath("docker"); return err }
+	composeDetector  = detectCompose
+	cliPathRemover   = removeCLIFromPath
+	localDataRemover = removeLocalData
+	// Deletes the working directory, so a test that did not stub it would take
+	// its own temp dir with it.
+	installDirRemover = removeInstallationDirectory
+)
+
 func NewUninstallCommand() *cobra.Command {
 	opts := uninstallOptions{}
 
@@ -59,11 +72,11 @@ func NewUninstallCommand() *cobra.Command {
 func runUninstall(cmd *cobra.Command, opts uninstallOptions) error {
 	out := cmd.OutOrStdout()
 
-	if _, err := exec.LookPath("docker"); err != nil {
+	if err := dockerLookPath(); err != nil {
 		return errors.New("docker is not installed")
 	}
 
-	compose, err := detectCompose()
+	compose, err := composeDetector()
 	if err != nil {
 		return err
 	}
@@ -106,7 +119,7 @@ func runUninstall(cmd *cobra.Command, opts uninstallOptions) error {
 		if err := compose.down(shouldRemoveVolumes(opts)); err != nil {
 			return err
 		}
-		if err := removeLocalData(out); err != nil {
+		if err := localDataRemover(out); err != nil {
 			return err
 		}
 		fmt.Fprintf(out, "✓ Containers and data removed. Backup created at %s\n", backupRoot)
@@ -122,7 +135,7 @@ func runUninstall(cmd *cobra.Command, opts uninstallOptions) error {
 		if err := compose.down(shouldRemoveVolumes(opts)); err != nil {
 			return err
 		}
-		if err := removeLocalData(out); err != nil {
+		if err := localDataRemover(out); err != nil {
 			return err
 		}
 		fmt.Fprintln(out, "✓ Containers and data removed.")
@@ -142,12 +155,12 @@ func runUninstall(cmd *cobra.Command, opts uninstallOptions) error {
 		}
 
 		// Remove all MineOS data files
-		if err := removeLocalData(out); err != nil {
+		if err := localDataRemover(out); err != nil {
 			fmt.Fprintf(out, "Warning: Failed to remove data: %v\n", err)
 		}
 
 		// Remove entire installation directory
-		if err := removeInstallationDirectory(out); err != nil {
+		if err := installDirRemover(out); err != nil {
 			fmt.Fprintf(out, "Warning: Failed to remove installation directory: %v\n", err)
 		}
 
@@ -185,7 +198,7 @@ func maybeRemoveCLIFromPath(out io.Writer, opts uninstallOptions) {
 	if !opts.removeCLI {
 		return
 	}
-	if err := removeCLIFromPath(out); err != nil {
+	if err := cliPathRemover(out); err != nil {
 		fmt.Fprintf(out, "Warning: Failed to remove CLI from PATH: %v\n", err)
 	}
 }
@@ -396,7 +409,7 @@ func detectCompose() (composeRunner, error) {
 }
 
 func (c composeRunner) down(withVolumes bool) error {
-	args := append([]string{}, c.baseArgs...)
+	var args []string
 	// Explicitly reference docker-compose.yml in the current directory
 	if _, err := os.Stat("docker-compose.yml"); err == nil {
 		args = append(args, "-f", "docker-compose.yml")
@@ -405,10 +418,10 @@ func (c composeRunner) down(withVolumes bool) error {
 	if withVolumes {
 		args = append(args, "--volumes")
 	}
-	cmd := exec.Command(c.exe, args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	// Through invoke rather than exec.Command directly, so the exec seam above
+	// applies here too. It did not before, which meant a test that stubbed
+	// compose still shelled out to a real docker for `down`.
+	return c.invoke(args, nil)
 }
 
 func shouldRemoveVolumes(opts uninstallOptions) bool {
