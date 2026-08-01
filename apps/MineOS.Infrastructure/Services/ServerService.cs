@@ -525,7 +525,10 @@ public class ServerService : IServerService
         return serverDetails;
     }
 
-    public async Task<ServerHeartbeatDto> GetServerStatusAsync(string name, CancellationToken cancellationToken)
+    // Not async: every step here is synchronous, so the async machinery only
+    // added an allocation. Callers await it immediately, so moving the throw
+    // from the returned task to the call itself is not observable.
+    public Task<ServerHeartbeatDto> GetServerStatusAsync(string name, CancellationToken cancellationToken)
     {
         var serverPath = GetServerPath(name);
         if (!Directory.Exists(serverPath))
@@ -539,14 +542,14 @@ public class ServerService : IServerService
         // TODO: Add ping info when we implement MinecraftPing protocol
         // TODO: Add memory info from /proc/{pid}/status
 
-        return new ServerHeartbeatDto(
+        return Task.FromResult(new ServerHeartbeatDto(
             name,
             status,
             processInfo?.JavaPid,
             processInfo?.ScreenPid,
             null, // ping
             null  // memory
-        );
+        ));
     }
 
     public async Task StartServerAsync(string name, CancellationToken cancellationToken)

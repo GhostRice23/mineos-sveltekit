@@ -105,7 +105,11 @@ public sealed class FabricService : IFabricService
         }
     }
 
-    public async Task<FabricInstallResultDto> InstallFabricAsync(
+    // Not async: this only registers the install and hands it to Task.Run, so
+    // every step before the return is synchronous. Callers await it
+    // immediately, so returning a completed task rather than an async one is
+    // not observable.
+    public Task<FabricInstallResultDto> InstallFabricAsync(
         string minecraftVersion,
         string loaderVersion,
         string serverName,
@@ -116,7 +120,7 @@ public sealed class FabricService : IFabricService
 
         if (!Directory.Exists(serverPath))
         {
-            return new FabricInstallResultDto(installId, "failed", $"Server '{serverName}' not found");
+            return Task.FromResult(new FabricInstallResultDto(installId, "failed", $"Server '{serverName}' not found"));
         }
 
         var state = new FabricInstallState(
@@ -145,7 +149,7 @@ public sealed class FabricService : IFabricService
             }
         }, CancellationToken.None);
 
-        return new FabricInstallResultDto(installId, "started", null);
+        return Task.FromResult(new FabricInstallResultDto(installId, "started", null));
     }
 
     public Task<FabricInstallStatusDto?> GetInstallStatusAsync(string installId, CancellationToken cancellationToken)

@@ -17,7 +17,7 @@ public static class ArchiveEndpoints
             return Results.Ok(archives);
         });
 
-        servers.MapPost("/{name}/archives", async (
+        servers.MapPost("/{name}/archives", (
             string name,
             IBackgroundJobService jobService) =>
         {

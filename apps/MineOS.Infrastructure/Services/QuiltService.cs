@@ -95,7 +95,11 @@ public sealed class QuiltService : IQuiltService
         }
     }
 
-    public async Task<QuiltInstallResultDto> InstallQuiltAsync(
+    // Not async: this only registers the install and hands it to Task.Run, so
+    // every step before the return is synchronous. Callers await it
+    // immediately, so returning a completed task rather than an async one is
+    // not observable.
+    public Task<QuiltInstallResultDto> InstallQuiltAsync(
         string minecraftVersion, string loaderVersion, string serverName,
         CancellationToken cancellationToken)
     {
@@ -103,7 +107,7 @@ public sealed class QuiltService : IQuiltService
         var serverPath = GetServerPath(serverName);
 
         if (!Directory.Exists(serverPath))
-            return new QuiltInstallResultDto(installId, "failed", $"Server '{serverName}' not found");
+            return Task.FromResult(new QuiltInstallResultDto(installId, "failed", $"Server '{serverName}' not found"));
 
         var state = new QuiltInstallState(
             installId, minecraftVersion, loaderVersion,
@@ -126,7 +130,7 @@ public sealed class QuiltService : IQuiltService
             }
         }, CancellationToken.None);
 
-        return new QuiltInstallResultDto(installId, "started", null);
+        return Task.FromResult(new QuiltInstallResultDto(installId, "started", null));
     }
 
     public Task<QuiltInstallStatusDto?> GetInstallStatusAsync(string installId, CancellationToken cancellationToken)

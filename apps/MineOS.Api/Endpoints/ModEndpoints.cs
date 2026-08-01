@@ -226,7 +226,7 @@ public static class ModEndpoints
             }
         });
 
-        servers.MapPost("/{name}/mods/install-from-curseforge", async (
+        servers.MapPost("/{name}/mods/install-from-curseforge", (
             string name,
             [FromBody] InstallModRequest request,
             IBackgroundJobService jobService) =>
@@ -240,7 +240,7 @@ public static class ModEndpoints
             return Results.Accepted($"/api/v1/jobs/{jobId}", new { jobId, message = "Mod install queued" });
         });
 
-        servers.MapPost("/{name}/modpacks/install", async (
+        servers.MapPost("/{name}/modpacks/install", (
             string name,
             [FromBody] InstallModpackRequest request,
             IBackgroundJobService jobService) =>
@@ -255,7 +255,7 @@ public static class ModEndpoints
         });
 
         // Enhanced modpack install with state tracking and rollback
-        servers.MapPost("/{name}/modpacks/install-enhanced", async (
+        servers.MapPost("/{name}/modpacks/install-enhanced", (
             string name,
             [FromBody] InstallModpackEnhancedRequest request,
             IBackgroundJobService jobService) =>
