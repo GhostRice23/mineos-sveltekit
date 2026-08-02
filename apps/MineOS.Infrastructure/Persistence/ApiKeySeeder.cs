@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using MineOS.Domain.Entities;
+using MineOS.Infrastructure.Services;
 
 namespace MineOS.Infrastructure.Persistence;
 
@@ -33,16 +34,28 @@ public sealed class ApiKeySeeder
             return;
         }
 
-        var seedKey = _config["ApiKey:SeedKey"];
-        if (string.IsNullOrWhiteSpace(seedKey))
+        // Written as two branches rather than a bool + reassignment so that
+        // seedKey is provably non-null afterwards: the compiler narrows on
+        // string.IsNullOrWhiteSpace directly ([NotNullWhen(false)]), but not on
+        // a bool holding its result.
+        var configuredKey = _config["ApiKey:SeedKey"];
+        string seedKey;
+        bool wasGenerated;
+        if (string.IsNullOrWhiteSpace(configuredKey))
         {
             seedKey = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+            wasGenerated = true;
+        }
+        else
+        {
+            seedKey = configuredKey;
+            wasGenerated = false;
         }
 
         var apiKey = new ApiKey
         {
             UserId = 1, // Will be associated with first user
-            Key = seedKey.Trim(),
+            KeyHash = ApiKeyHasher.Hash(seedKey.Trim()),
             Name = "default",
             Permissions = """["*"]""", // Full permissions
             CreatedAt = DateTimeOffset.UtcNow,
@@ -52,6 +65,26 @@ public sealed class ApiKeySeeder
         _db.ApiKeys.Add(apiKey);
         await _db.SaveChangesAsync(cancellationToken);
 
-        _logger.LogInformation("Seeded API key: {ApiKey}", apiKey.Key);
+        // This key carries ["*"], and a valid API key is admin identity, so the
+        // value is not written to the log in the normal case: the operator
+        // supplied ApiKey:SeedKey (the CLI installer puts it in .env) and
+        // already has it. Logging it again only copies an admin credential into
+        // wherever logs are shipped and retained.
+        //
+        // The generated fallback is the exception. Nothing else ever displays
+        // that value, so withholding it would leave an unusable install; it is
+        // logged once, as a warning, saying so.
+        if (wasGenerated)
+        {
+            _logger.LogWarning(
+                "No ApiKey:SeedKey was configured, so one was generated: {ApiKey}. " +
+                "This is the only time it is shown. Store it somewhere safe, and " +
+                "treat this log entry as a secret until you rotate the key.",
+                seedKey);
+        }
+        else
+        {
+            _logger.LogInformation("Seeded the configured API key.");
+        }
     }
 }

@@ -2788,18 +2788,21 @@ public sealed class ModService : IModService
         {
             // Use tar command to extract
             var tarArgs = isGzipped ? "-xzf" : "-xf";
-            var process = new System.Diagnostics.Process
+            // ArgumentList rather than an interpolated Arguments string: see the
+            // note in ArchiveService.
+            var startInfo = new System.Diagnostics.ProcessStartInfo
             {
-                StartInfo = new System.Diagnostics.ProcessStartInfo
-                {
-                    FileName = "tar",
-                    Arguments = $"{tarArgs} \"{tarPath}\" -C \"{tempExtractPath}\"",
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                }
+                FileName = "tar",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
             };
+            startInfo.ArgumentList.Add(tarArgs);
+            startInfo.ArgumentList.Add(tarPath);
+            startInfo.ArgumentList.Add("-C");
+            startInfo.ArgumentList.Add(tempExtractPath);
+            var process = new System.Diagnostics.Process { StartInfo = startInfo };
 
             process.Start();
             await process.WaitForExitAsync(cancellationToken);

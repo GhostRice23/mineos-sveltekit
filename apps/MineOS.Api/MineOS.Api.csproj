@@ -12,7 +12,11 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
-    <PackageReference Include="Microsoft.OpenApi" Version="2.3.0" />
+    <!-- 2.7.5 is the 2.x fix for GHSA-v5pm-xwqc-g5wc (uncontrolled recursion on
+         circular schema references). Swashbuckle 10.1.0 asks for >= 2.3.0, so
+         this satisfies it; staying on 2.x keeps the OpenApiSecuritySchemeReference
+         API that Program.cs uses. -->
+    <PackageReference Include="Microsoft.OpenApi" Version="2.7.5" />
     <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
     <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="10.1.0" />

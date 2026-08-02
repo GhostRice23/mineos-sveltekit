@@ -262,6 +262,11 @@
 	}
 </script>
 
+<!-- The crop backdrop only receives keydown while focused, which it never is,
+     so Escape is bound at the window instead. `<svelte:window>` has to sit at
+     the top level, hence the showCropModal guard rather than an {#if} block. -->
+<svelte:window onkeydown={(e) => showCropModal && e.key === 'Escape' && cancelCrop()} />
+
 <div class="icon-uploader">
 	<div class="icon-preview">
 		{#if hasIcon}
@@ -338,10 +343,12 @@
 </div>
 
 {#if showCropModal}
+	<!-- svelte-ignore a11y_click_events_have_key_events -->
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
-	<div class="crop-backdrop" onclick={cancelCrop} onkeydown={(e) => e.key === 'Escape' && cancelCrop()}>
+	<div class="crop-backdrop" onclick={cancelCrop} role="presentation">
+		<!-- svelte-ignore a11y_click_events_have_key_events -->
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
-		<div class="crop-modal" onclick={(e) => e.stopPropagation()}>
+		<div class="crop-modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" tabindex="-1">
 			<h3>Crop Server Icon</h3>
 			<p class="crop-hint">Drag to position, scroll to zoom. Icon will be saved as 64x64.</p>
 

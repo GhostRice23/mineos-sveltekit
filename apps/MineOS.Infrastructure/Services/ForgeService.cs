@@ -83,7 +83,11 @@ public sealed class ForgeService : IForgeService
             .ToList();
     }
 
-    public async Task<ForgeInstallResultDto> InstallForgeAsync(
+    // Not async: this only registers the install and hands it to Task.Run, so
+    // every step before the return is synchronous. Callers await it
+    // immediately, so returning a completed task rather than an async one is
+    // not observable.
+    public Task<ForgeInstallResultDto> InstallForgeAsync(
         string minecraftVersion,
         string forgeVersion,
         string serverName,
@@ -94,7 +98,7 @@ public sealed class ForgeService : IForgeService
 
         if (!Directory.Exists(serverPath))
         {
-            return new ForgeInstallResultDto(installId, "failed", $"Server '{serverName}' not found");
+            return Task.FromResult(new ForgeInstallResultDto(installId, "failed", $"Server '{serverName}' not found"));
         }
 
         var state = new ForgeInstallState(
@@ -123,7 +127,7 @@ public sealed class ForgeService : IForgeService
             }
         }, CancellationToken.None);
 
-        return new ForgeInstallResultDto(installId, "started", null);
+        return Task.FromResult(new ForgeInstallResultDto(installId, "started", null));
     }
 
     public Task<ForgeInstallStatusDto?> GetInstallStatusAsync(string installId, CancellationToken cancellationToken)
@@ -257,16 +261,21 @@ public sealed class ForgeService : IForgeService
             state.AppendOutput($"Starting Forge installer for {fullVersion}...");
             _logger.LogInformation("Running Forge installer in {ServerPath}", state.ServerPath);
 
+            // ArgumentList rather than an interpolated Arguments string: see the
+            // note in ArchiveService.
             var psi = new ProcessStartInfo
             {
                 FileName = "java",
-                Arguments = $"-jar \"{installerPath}\" --installServer",
                 WorkingDirectory = state.ServerPath,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
+
+            psi.ArgumentList.Add("-jar");
+            psi.ArgumentList.Add(installerPath);
+            psi.ArgumentList.Add("--installServer");
 
             using var process = Process.Start(psi);
             if (process == null)

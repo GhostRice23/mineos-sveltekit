@@ -59,21 +59,6 @@
 		font-weight: 600;
 	}
 
-	.back-btn {
-		background: none;
-		border: 1px solid var(--border-color, #374151);
-		color: var(--text-secondary, #9ca3af);
-		padding: 0.35rem 0.75rem;
-		border-radius: 0.375rem;
-		cursor: pointer;
-		font-size: 0.85rem;
-	}
-
-	.back-btn:hover {
-		color: var(--text-primary, #f9fafb);
-		border-color: var(--text-secondary, #9ca3af);
-	}
-
 	.name-input-group {
 		display: flex;
 		flex-direction: column;
@@ -104,24 +89,4 @@
 		color: #ef4444;
 	}
 
-	.create-btn {
-		padding: 0.6rem 1.5rem;
-		border: none;
-		border-radius: 0.5rem;
-		background: #3b82f6;
-		color: white;
-		font-size: 0.95rem;
-		font-weight: 600;
-		cursor: pointer;
-		align-self: flex-start;
-	}
-
-	.create-btn:hover:not(:disabled) {
-		background: #2563eb;
-	}
-
-	.create-btn:disabled {
-		opacity: 0.4;
-		cursor: not-allowed;
-	}
 </style>

@@ -70,15 +70,26 @@ public sealed class ArchiveService : IArchiveService
 
         // Use tar to create compressed archive
         // Exclude the archives directory to prevent "file changed as we read it" errors
+        // ArgumentList, not Arguments: a single interpolated string is re-parsed
+        // into argv by the runtime, so a quote anywhere in a path splits it into
+        // extra tokens. tar reads those as options, and it has options that run
+        // commands (--checkpoint-action, --to-command). ArgumentList passes each
+        // element through as one argv entry with no parsing at all.
         var psi = new ProcessStartInfo
         {
             FileName = "tar",
-            Arguments = $"-czf \"{archiveFullPath}\" --exclude=\"archives\" -C \"{Path.GetDirectoryName(serverPath)}\" \"{Path.GetFileName(serverPath)}\"",
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true
         };
+
+        psi.ArgumentList.Add("-czf");
+        psi.ArgumentList.Add(archiveFullPath);
+        psi.ArgumentList.Add("--exclude=archives");
+        psi.ArgumentList.Add("-C");
+        psi.ArgumentList.Add(Path.GetDirectoryName(serverPath) ?? string.Empty);
+        psi.ArgumentList.Add(Path.GetFileName(serverPath));
 
         using var process = Process.Start(psi);
         if (process == null)

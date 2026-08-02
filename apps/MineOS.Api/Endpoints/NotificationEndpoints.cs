@@ -89,7 +89,10 @@ public static class NotificationEndpoints
 
                 string? lastPayload = null;
                 var user = context.User;
-                var enforceAccess = user?.Identity?.IsAuthenticated == true && !IsAdmin(user);
+                // HttpContext.User is never null; the null-conditional on `user`
+                // only told the compiler otherwise, which then flagged the
+                // TryGetUserId call below.
+                var enforceAccess = user.Identity?.IsAuthenticated == true && !IsAdmin(user);
                 var userId = 0;
                 if (enforceAccess && !TryGetUserId(user, out userId))
                 {

@@ -314,7 +314,7 @@ public static class HostEndpoints
             }
         });
 
-        adminHost.MapPost("/imports/{filename}/create-server", async (
+        adminHost.MapPost("/imports/{filename}/create-server", (
             string filename,
             [FromBody] ImportServerRequest request,
             IBackgroundJobService jobService,

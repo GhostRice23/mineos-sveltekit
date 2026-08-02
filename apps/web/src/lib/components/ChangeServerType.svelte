@@ -326,10 +326,16 @@
 	}
 </script>
 
-<div class="modal-overlay" onclick={onClose} role="dialog">
+<!-- Escape is the keyboard equivalent of clicking the backdrop; the backdrop
+     itself is presentational, and the dialog role belongs on the panel. -->
+<svelte:window onkeydown={(e) => e.key === 'Escape' && onClose()} />
+
+<!-- svelte-ignore a11y_click_events_have_key_events -->
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="modal-overlay" onclick={onClose} role="presentation">
 	<!-- svelte-ignore a11y_click_events_have_key_events -->
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
-	<div class="modal" onclick={(e) => e.stopPropagation()}>
+	<div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" tabindex="-1">
 		<div class="modal-header">
 			<h2>Change Server Type</h2>
 			<button class="close-btn" onclick={onClose}>&times;</button>

@@ -685,26 +685,6 @@
 		background: var(--mc-grass-dark);
 	}
 
-	.btn-success {
-		background: rgba(106, 176, 76, 0.18);
-		color: #b7f5a2;
-		border: 1px solid rgba(106, 176, 76, 0.35);
-	}
-
-	.btn-success:hover:not(:disabled) {
-		background: rgba(106, 176, 76, 0.28);
-	}
-
-	.btn-warning {
-		background: rgba(139, 90, 43, 0.2);
-		color: #f4c08e;
-		border: 1px solid rgba(139, 90, 43, 0.4);
-	}
-
-	.btn-warning:hover:not(:disabled) {
-		background: rgba(139, 90, 43, 0.3);
-	}
-
 	.btn-danger {
 		background: rgba(210, 94, 72, 0.2);
 		color: #ffb6a6;
@@ -713,16 +693,6 @@
 
 	.btn-danger:hover:not(:disabled) {
 		background: rgba(210, 94, 72, 0.3);
-	}
-
-	.btn-secondary {
-		background: #2b2f45;
-		color: #d4d9f1;
-		border: 1px solid #3a3f5a;
-	}
-
-	.btn-secondary:hover:not(:disabled) {
-		background: #3a3f5a;
 	}
 
 	.grid {

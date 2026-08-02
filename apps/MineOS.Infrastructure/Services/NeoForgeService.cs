@@ -79,7 +79,11 @@ public sealed class NeoForgeService : INeoForgeService
         return all.Where(v => v.MinecraftVersion == minecraftVersion).ToList();
     }
 
-    public async Task<NeoForgeInstallResultDto> InstallNeoForgeAsync(
+    // Not async: this only registers the install and hands it to Task.Run, so
+    // every step before the return is synchronous. Callers await it
+    // immediately, so returning a completed task rather than an async one is
+    // not observable.
+    public Task<NeoForgeInstallResultDto> InstallNeoForgeAsync(
         string minecraftVersion, string neoForgeVersion, string serverName,
         CancellationToken cancellationToken)
     {
@@ -88,7 +92,7 @@ public sealed class NeoForgeService : INeoForgeService
 
         if (!Directory.Exists(serverPath))
         {
-            return new NeoForgeInstallResultDto(installId, "failed", $"Server '{serverName}' not found");
+            return Task.FromResult(new NeoForgeInstallResultDto(installId, "failed", $"Server '{serverName}' not found"));
         }
 
         var state = new NeoForgeInstallState(
@@ -112,7 +116,7 @@ public sealed class NeoForgeService : INeoForgeService
             }
         }, CancellationToken.None);
 
-        return new NeoForgeInstallResultDto(installId, "started", null);
+        return Task.FromResult(new NeoForgeInstallResultDto(installId, "started", null));
     }
 
     public Task<NeoForgeInstallStatusDto?> GetInstallStatusAsync(string installId, CancellationToken cancellationToken)
@@ -313,16 +317,21 @@ public sealed class NeoForgeService : INeoForgeService
             state.UpdateProgress(40, "Running NeoForge installer...");
 
             // Run the installer (same pattern as Forge)
+            // ArgumentList rather than an interpolated Arguments string: see the
+            // note in ArchiveService.
             var psi = new System.Diagnostics.ProcessStartInfo
             {
                 FileName = "java",
-                Arguments = $"-jar \"{installerPath}\" --installServer",
                 WorkingDirectory = state.ServerPath,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
+
+            psi.ArgumentList.Add("-jar");
+            psi.ArgumentList.Add(installerPath);
+            psi.ArgumentList.Add("--installServer");
 
             using var process = new System.Diagnostics.Process { StartInfo = psi };
             process.Start();

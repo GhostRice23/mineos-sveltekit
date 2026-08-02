@@ -10,6 +10,7 @@ import {
 	parseAuthToken,
 	sanitizeCloseCode,
 	sanitizeCloseReason,
+	isTrustedUpgradeOrigin,
 	shouldProxyWebSocket,
 	toWebSocketBase
 } from './ws-proxy.js';
@@ -263,5 +264,169 @@ describe('createUpgradeHandler', () => {
 		handle({ url: '/nope', headers: { host: 'localhost:3000' } }, socket, Buffer.alloc(0));
 		expect(socket.write).toHaveBeenCalledWith('HTTP/1.1 404 Not Found\r\n\r\n');
 		expect(socket.destroy).toHaveBeenCalled();
+	});
+});
+
+describe('isTrustedUpgradeOrigin', () => {
+	it('allows a handshake with no Origin at all', () => {
+		// Browsers always send one; its absence means the Go CLI or curl, which
+		// is not what cross-site WebSocket hijacking exploits.
+		expect(isTrustedUpgradeOrigin({ host: 'mineos.local' })).toBe(true);
+		expect(isTrustedUpgradeOrigin({ origin: null, host: 'mineos.local' })).toBe(true);
+		expect(isTrustedUpgradeOrigin({ origin: '', host: 'mineos.local' })).toBe(true);
+	});
+
+	it('allows an Origin whose host matches the Host header', () => {
+		expect(
+			isTrustedUpgradeOrigin({ origin: 'https://mineos.local', host: 'mineos.local' })
+		).toBe(true);
+	});
+
+	it('ignores the protocol, so TLS termination upstream still works', () => {
+		expect(
+			isTrustedUpgradeOrigin({ origin: 'https://mineos.local:8443', host: 'mineos.local:8443' })
+		).toBe(true);
+	});
+
+	it('rejects a different host', () => {
+		expect(isTrustedUpgradeOrigin({ origin: 'https://evil.example', host: 'mineos.local' })).toBe(
+			false
+		);
+	});
+
+	it('rejects a host that merely shares a suffix', () => {
+		expect(
+			isTrustedUpgradeOrigin({ origin: 'https://evil-mineos.local', host: 'mineos.local' })
+		).toBe(false);
+		expect(
+			isTrustedUpgradeOrigin({ origin: 'https://mineos.local.evil.example', host: 'mineos.local' })
+		).toBe(false);
+	});
+
+	it('rejects a port mismatch', () => {
+		expect(
+			isTrustedUpgradeOrigin({ origin: 'https://mineos.local:1234', host: 'mineos.local:3000' })
+		).toBe(false);
+	});
+
+	it('accepts the first X-Forwarded-Host value', () => {
+		expect(
+			isTrustedUpgradeOrigin({
+				origin: 'https://mineos.example',
+				host: 'web:3000',
+				forwardedHost: 'mineos.example, inner-proxy'
+			})
+		).toBe(true);
+	});
+
+	it('accepts the configured ORIGIN', () => {
+		expect(
+			isTrustedUpgradeOrigin({
+				origin: 'https://mineos.example',
+				host: 'web:3000',
+				configuredOrigin: 'https://mineos.example'
+			})
+		).toBe(true);
+	});
+
+	it('rejects an Origin carrying userinfo', () => {
+		// "https://mineos.local@evil.example" parses to host evil.example; a
+		// browser never sends this shape, so treat it as an attack on the parser.
+		expect(
+			isTrustedUpgradeOrigin({ origin: 'https://mineos.local@evil.example', host: 'mineos.local' })
+		).toBe(false);
+	});
+
+	it('rejects an unparseable Origin', () => {
+		expect(isTrustedUpgradeOrigin({ origin: 'not a url', host: 'mineos.local' })).toBe(false);
+		// "null" is what a sandboxed iframe sends — it is not our host.
+		expect(isTrustedUpgradeOrigin({ origin: 'null', host: 'mineos.local' })).toBe(false);
+	});
+});
+
+describe('createUpgradeHandler origin enforcement', () => {
+	function harness(configuredOrigin = null) {
+		const createUpstream = vi.fn(() =>
+			Object.assign(new EventEmitter(), {
+				readyState: WebSocket.OPEN,
+				close: vi.fn(),
+				terminate: vi.fn(),
+				send: vi.fn()
+			})
+		);
+		const socket = Object.assign(new EventEmitter(), { write: vi.fn(), destroy: vi.fn() });
+		const handle = createUpgradeHandler({
+			wss: { handleUpgrade: vi.fn() },
+			wsBase: 'ws://api:5078',
+			apiKey: 'key',
+			configuredOrigin,
+			logger: silentLogger,
+			createUpstream
+		});
+		return { handle, socket, createUpstream };
+	}
+
+	const shellUpgrade = (headers) => ({ url: '/api/v1/admin/shell/ws', headers });
+
+	it('refuses a cross-origin handshake without contacting the API', () => {
+		const { handle, socket, createUpstream } = harness();
+
+		handle(
+			shellUpgrade({
+				host: 'mineos.local',
+				origin: 'https://evil.example',
+				cookie: 'auth_token=super-secret'
+			}),
+			socket,
+			Buffer.alloc(0)
+		);
+
+		expect(socket.write).toHaveBeenCalledWith('HTTP/1.1 403 Forbidden\r\n\r\n');
+		expect(socket.destroy).toHaveBeenCalled();
+		// The important half: the operator's cookie is never forwarded upstream.
+		expect(createUpstream).not.toHaveBeenCalled();
+	});
+
+	it('lets a same-origin handshake through', () => {
+		const { handle, socket, createUpstream } = harness();
+
+		handle(
+			shellUpgrade({ host: 'mineos.local', origin: 'https://mineos.local' }),
+			socket,
+			Buffer.alloc(0)
+		);
+
+		expect(socket.write).not.toHaveBeenCalled();
+		expect(createUpstream).toHaveBeenCalledTimes(1);
+	});
+
+	it('lets a non-browser client with no Origin through', () => {
+		const { handle, socket, createUpstream } = harness();
+
+		handle(shellUpgrade({ host: 'mineos.local' }), socket, Buffer.alloc(0));
+
+		expect(socket.write).not.toHaveBeenCalled();
+		expect(createUpstream).toHaveBeenCalledTimes(1);
+	});
+
+	it('honours the configured ORIGIN when Host is the internal name', () => {
+		const { handle, socket, createUpstream } = harness('https://mineos.example');
+
+		handle(
+			shellUpgrade({ host: 'web:3000', origin: 'https://mineos.example' }),
+			socket,
+			Buffer.alloc(0)
+		);
+
+		expect(createUpstream).toHaveBeenCalledTimes(1);
+	});
+
+	it('still 404s an unproxied path before looking at Origin', () => {
+		const { handle, socket, createUpstream } = harness();
+
+		handle({ url: '/nope', headers: { host: 'a', origin: 'https://evil.example' } }, socket, Buffer.alloc(0));
+
+		expect(socket.write).toHaveBeenCalledWith('HTTP/1.1 404 Not Found\r\n\r\n');
+		expect(createUpstream).not.toHaveBeenCalled();
 	});
 });

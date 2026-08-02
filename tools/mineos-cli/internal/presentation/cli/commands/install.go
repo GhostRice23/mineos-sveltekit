@@ -27,11 +27,9 @@ import (
 // Installer color palette — consistent with TUI styles
 var (
 	// Core colors
-	styleBold    = lipgloss.NewStyle().Bold(true)
 	styleTitle   = lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true)
 	styleSuccess = lipgloss.NewStyle().Foreground(lipgloss.Color("70")).Bold(true)
 	styleWarning = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
-	styleError   = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true)
 	styleDim     = lipgloss.NewStyle().Foreground(lipgloss.Color("246"))
 	styleAccent  = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 	styleInfo    = lipgloss.NewStyle().Foreground(lipgloss.Color("81"))
@@ -366,7 +364,11 @@ func runInstall(cmd *cobra.Command, opts installOptions) error {
 		cloneCmd.Stdout = out
 		cloneCmd.Stderr = out
 		if err := cloneCmd.Run(); err != nil {
-			return fmt.Errorf("failed to clone source repository: %w\nPlease clone manually: git clone https://github.com/freeman412/mineos-sveltekit.git .", err)
+			// The hint goes to the terminal rather than into the error: callers
+			// prefix errors with their own context, and a newline in the middle
+			// of that renders badly.
+			fmt.Fprintln(out, "Clone manually with: git clone https://github.com/freeman412/mineos-sveltekit.git .")
+			return fmt.Errorf("failed to clone source repository: %w", err)
 		}
 		if !dirExists("apps") {
 			return errors.New("source files not found after cloning; the repository may have changed structure")

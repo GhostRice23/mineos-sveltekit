@@ -23,6 +23,70 @@ export function parseAuthToken(cookieHeader) {
 }
 
 /**
+ * Host of a URL-ish string, or null when it is not usable.
+ * @param {string | null | undefined} value
+ * @returns {string | null}
+ */
+function hostOf(value) {
+	if (!value) return null;
+	try {
+		const parsed = new URL(value);
+		// Browsers never send userinfo in Origin; a userinfo-bearing value is
+		// either garbage or an attempt to confuse the parser. Reject it.
+		if (parsed.username || parsed.password) return null;
+		return parsed.host.toLowerCase();
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Same-origin check for the WebSocket handshake.
+ *
+ * hooks.server.ts guards SvelteKit requests, but an upgrade never reaches
+ * SvelteKit — it is answered off the raw 'upgrade' event — so without this the
+ * only proxied path (`/api/v1/admin/shell/ws`, the admin shell) had no origin
+ * check at all. Cookies ride along on a cross-site handshake the same way they
+ * do on any subresource request, so any page a signed-in operator visited could
+ * open a shell as them: cross-site WebSocket hijacking.
+ *
+ * Host matching mirrors isTrustedOrigin in src/lib/server/originCheck.ts, and
+ * deliberately ignores protocol for the same reason: behind a TLS-terminating
+ * proxy the browser sends https:// while the internal request is http://.
+ * The logic is duplicated rather than imported because this module runs as
+ * plain Node ESM against the built output, with no access to src/.
+ *
+ * A missing Origin is allowed. Browsers always send one on a WebSocket
+ * handshake, so its absence means a non-browser client (the Go CLI, curl) —
+ * and those are not what CSWSH exploits. Requiring it would break them for no
+ * gain in defence.
+ *
+ * @param {{ origin?: string | null, host?: string | null, forwardedHost?: string | null, configuredOrigin?: string | null }} input
+ * @returns {boolean}
+ */
+export function isTrustedUpgradeOrigin({
+	origin,
+	host,
+	forwardedHost,
+	configuredOrigin
+} = {}) {
+	if (origin === null || origin === undefined || origin === '') return true;
+
+	const originHost = hostOf(origin);
+	if (!originHost) return false;
+
+	if (host && originHost === host.trim().toLowerCase()) return true;
+
+	const forwarded = forwardedHost?.split(',')[0].trim().toLowerCase();
+	if (forwarded && originHost === forwarded) return true;
+
+	const configuredHost = hostOf(configuredOrigin);
+	if (configuredHost && originHost === configuredHost) return true;
+
+	return false;
+}
+
+/**
  * Check if a path should be WebSocket proxied.
  * @param {string} path
  * @returns {boolean}
@@ -151,6 +215,7 @@ export function toWebSocketBase(apiBase) {
  * @property {import('ws').WebSocketServer} wss
  * @property {string} wsBase Upstream base URL, already in ws:// form.
  * @property {string} [apiKey]
+ * @property {string | null} [configuredOrigin] Value of the ORIGIN env var, if set.
  * @property {Pick<Console, 'log' | 'error'>} [logger]
  * @property {(url: string, headers: Record<string, string>) => import('ws').WebSocket} [createUpstream]
  */
@@ -169,6 +234,7 @@ export function createUpgradeHandler({
 	wss,
 	wsBase,
 	apiKey = '',
+	configuredOrigin = null,
 	logger = console,
 	createUpstream = (url, headers) => new WebSocket(url, { headers })
 }) {
@@ -187,6 +253,25 @@ export function createUpgradeHandler({
 			// SvelteKit doesn't handle WebSocket upgrades.
 			logger.log(`[WS] Rejecting WebSocket upgrade for: ${path}`);
 			socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
+			socket.destroy();
+			return;
+		}
+
+		// Checked before the cookie is read, so a cross-site handshake never gets
+		// as far as borrowing the operator's session.
+		if (
+			!isTrustedUpgradeOrigin({
+				origin: req.headers.origin,
+				host: req.headers.host,
+				forwardedHost: /** @type {string | undefined} */ (req.headers['x-forwarded-host']),
+				configuredOrigin
+			})
+		) {
+			logger.error(
+				`[WS Proxy] Blocked cross-origin upgrade for ${path}: ` +
+					`Origin="${req.headers.origin ?? ''}" Host="${req.headers.host ?? ''}"`
+			);
+			socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
 			socket.destroy();
 			return;
 		}

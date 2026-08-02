@@ -197,6 +197,7 @@ builder.Services.AddHttpClient<IModrinthService, ModrinthService>(client =>
     client.DefaultRequestHeaders.UserAgent.ParseAdd("MineOS/1.0");
 });
 builder.Services.AddHttpClient<CurseForgeClient>();
+builder.Services.AddScoped<ApiKeyHashUpgrader>();
 builder.Services.AddScoped<ApiKeySeeder>();
 builder.Services.AddScoped<UserSeeder>();
 builder.Services.AddScoped<ISettingsService, SettingsService>();
@@ -268,6 +269,12 @@ using (var scope = app.Services.CreateScope())
         await db.Database.MigrateAsync();
     else
         await db.Database.EnsureCreatedAsync();
+
+    // Before seeding: rehash any API key still stored as plaintext. Must run
+    // after Migrate (the KeyHash column has to exist) and before the seeder,
+    // whose "are there keys already?" check should see upgraded rows.
+    var apiKeyUpgrader = scope.ServiceProvider.GetRequiredService<ApiKeyHashUpgrader>();
+    await apiKeyUpgrader.UpgradeAsync(CancellationToken.None);
 
     // Seed initial data
     var seeder = scope.ServiceProvider.GetRequiredService<ApiKeySeeder>();

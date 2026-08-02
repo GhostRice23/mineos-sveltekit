@@ -4,6 +4,7 @@ using System.Security.Claims;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using MineOS.Application.Interfaces;
+using MineOS.Domain.ValueObjects;
 
 namespace MineOS.Api.Authorization;
 
@@ -13,6 +14,27 @@ public sealed class ServerAccessFilter : IEndpointFilter
     {
         var httpContext = context.HttpContext;
         var user = httpContext.User;
+
+        var hasServerName = TryGetServerName(httpContext, out var serverName);
+
+        // Checked before anything else, administrators included. Every
+        // server-scoped service builds a path with
+        // Path.Combine(BaseDirectory, ServersPathSegment, serverName), so the
+        // name is a path component; their GetSafePath helpers only contain the
+        // *relative* part against a root this name already chose. Letting the
+        // admin branch below skip the check would leave the file endpoints
+        // reachable at any path on the host via a name like "../../etc".
+        //
+        // A non-admin is additionally stopped by the access lookup further down
+        // (no grant exists for a traversal name), but that is a side effect of
+        // authorisation rather than a containment guarantee, and it does not
+        // apply to admins or to API-key callers at all.
+        // It runs ahead of the authentication check below too: whether the name
+        // is a usable path component has nothing to do with who is asking.
+        if (hasServerName && !ServerName.IsPathSafe(serverName))
+        {
+            return Results.BadRequest(new { error = "Invalid server name" });
+        }
 
         if (user?.Identity?.IsAuthenticated != true)
         {
@@ -30,7 +52,7 @@ public sealed class ServerAccessFilter : IEndpointFilter
             return Results.Unauthorized();
         }
 
-        if (!TryGetServerName(httpContext, out var serverName))
+        if (!hasServerName)
         {
             return await next(context);
         }

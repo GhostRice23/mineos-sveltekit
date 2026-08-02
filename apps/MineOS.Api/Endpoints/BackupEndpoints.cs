@@ -25,7 +25,7 @@ public static class BackupEndpoints
             return Results.Ok(backups);
         });
 
-        servers.MapPost("/{name}/backups", async (
+        servers.MapPost("/{name}/backups", (
             string name,
             IBackgroundJobService jobService) =>
         {

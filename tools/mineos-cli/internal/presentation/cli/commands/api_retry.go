@@ -25,13 +25,18 @@ func withApiKeyRetry(ctx context.Context, loadConfig *usecases.LoadConfigUseCase
 		return false, actionErr
 	}
 
-	key, refreshErr := refreshApiKeyFromDb(cfg)
+	// Recovers the common case: MINEOS_API_KEY went missing or stale while the
+	// key material it is derived from is still in .env. If the key there is
+	// simply wrong, this rewrites the same wrong value and the retry below
+	// fails with that said plainly -- there is no database to fall back to,
+	// because keys are stored hashed.
+	key, source, refreshErr := refreshApiKeyFromEnv(cfg)
 	if refreshErr != nil {
 		return false, fmt.Errorf("%w (auto-refresh failed: %v)", actionErr, refreshErr)
 	}
 
 	if out != nil {
-		fmt.Fprintln(out, "Refreshed API key from local database.")
+		fmt.Fprintf(out, "Rewrote MINEOS_API_KEY from %s.\n", source)
 	}
 
 	cfg, err = loadConfig.Execute(ctx)

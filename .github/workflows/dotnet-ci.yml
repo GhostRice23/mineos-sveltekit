@@ -34,8 +34,24 @@ jobs:
       - name: Restore
         run: dotnet restore apps/MineOS.Tests/MineOS.Tests.csproj
 
+      # `dotnet list --vulnerable` reports but always exits 0, so the marker
+      # line has to be checked explicitly or an advisory scrolls past unnoticed
+      # — which is how Microsoft.OpenApi 2.3.0 sat in the log for a while.
+      - name: Audit packages
+        run: |
+          dotnet list apps/MineOS.Tests/MineOS.Tests.csproj package \
+            --vulnerable --include-transitive 2>&1 | tee audit.txt
+          if grep -q "has the following vulnerable packages" audit.txt; then
+            echo "::error::Vulnerable NuGet packages found (see the table above)"
+            exit 1
+          fi
+
+      # -warnaserror is a ratchet, not a cleanup: all five projects already build
+      # with zero warnings, so this only stops that from quietly eroding. It
+      # lives here rather than in the csproj files so a local build stays
+      # workable while you are mid-change.
       - name: Build
-        run: dotnet build apps/MineOS.Tests/MineOS.Tests.csproj --no-restore -c Release
+        run: dotnet build apps/MineOS.Tests/MineOS.Tests.csproj --no-restore -c Release -warnaserror
 
       # Includes Architecture/LayerDependencyTests.cs, which fails if Domain or
       # Application gains a framework/outward dependency.
