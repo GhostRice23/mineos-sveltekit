@@ -9,7 +9,7 @@
 	import QuiltVersions from '../version-pickers/QuiltVersions.svelte';
 	import BedrockVersions from '../version-pickers/BedrockVersions.svelte';
 	import VelocityVersions from '../version-pickers/VelocityVersions.svelte';
-	import ArclightVersions from '../version-pickers/ArclightVersions.svelte';
+	import BungeeCordVersions from '../version-pickers/BungeeCordVersions.svelte';
 	import TemplateSelect from '../version-pickers/TemplateSelect.svelte';
 
 	interface VersionSelection {
@@ -43,9 +43,7 @@
 		quilt: 'Quilt',
 		bedrock: 'Bedrock',
 		velocity: 'Velocity',
-		'arclight-forge': 'Arclight (Forge)',
-		'arclight-neoforge': 'Arclight (NeoForge)',
-		'arclight-fabric': 'Arclight (Fabric)',
+		bungeecord: 'BungeeCord',
 		template: 'Template'
 	};
 </script>
@@ -98,14 +96,9 @@
 			onselect={(profile) => onselect({ profileId: profile.id, minecraftVersion: profile.version })}
 			onready={onready}
 		/>
-	{:else if implementation === 'arclight-forge' || implementation === 'arclight-neoforge' || implementation === 'arclight-fabric'}
-		<ArclightVersions
+	{:else if implementation === 'bungeecord'}
+		<BungeeCordVersions
 			{profiles}
-			loader={implementation === 'arclight-neoforge'
-				? 'neoforge'
-				: implementation === 'arclight-fabric'
-					? 'fabric'
-					: 'forge'}
 			onselect={(profile) => onselect({ profileId: profile.id, minecraftVersion: profile.version })}
 			onready={onready}
 		/>

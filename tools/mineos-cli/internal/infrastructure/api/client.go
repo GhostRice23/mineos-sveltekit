@@ -327,43 +327,16 @@ type PerfSample struct {
 	PlayerCount int       `json:"playerCount"`
 }
 
-// PerformanceHistory returns recorded samples for a server, oldest first.
-//
-// The API has stored this all along; the metrics panel just never asked, so it
-// opened blank and stayed that way until the first live sample arrived. The
-// server clamps the window to 5..1440 minutes.
+// PerformanceHistory fetches DB-backed samples for the last N minutes
+// (the API clamps minutes to 5-1440). Oldest first.
 func (c *Client) PerformanceHistory(ctx context.Context, name string, minutes int) ([]PerfSample, error) {
-	if strings.TrimSpace(c.apiKey) == "" {
-		return nil, ErrApiKeyMissing
-	}
 	if strings.TrimSpace(name) == "" {
 		return nil, errors.New("server name is required")
 	}
-
 	endpoint := fmt.Sprintf("%s/servers/%s/performance/history?minutes=%d",
-		c.apiBaseURL, url.PathEscape(name), minutes)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("X-Api-Key", c.apiKey)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
-		return nil, ErrApiKeyInvalid
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("performance history failed: %s", readBody(resp.Body))
-	}
-
+		c.apiBaseURL, url.PathEscape(strings.TrimSpace(name)), minutes)
 	var samples []PerfSample
-	if err := json.NewDecoder(resp.Body).Decode(&samples); err != nil {
+	if err := c.getJSON(ctx, endpoint, &samples); err != nil {
 		return nil, err
 	}
 	return samples, nil

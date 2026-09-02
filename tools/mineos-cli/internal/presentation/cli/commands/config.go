@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/freemancraft/mineos-sveltekit/tools/mineos-cli/internal/application/usecases"
+	"github.com/freemancraft/mineos-sveltekit/tools/mineos-cli/internal/infrastructure/env"
 )
 
 func NewConfigCommand(loadConfig *usecases.LoadConfigUseCase) *cobra.Command {
@@ -95,10 +96,9 @@ Examples:
 				return fmt.Errorf("invalid channel: %s (must be 'stable' or 'prerelease')", args[0])
 			}
 
-			// Update .env in place. This used to read the whole file into a map
-			// and godotenv.Write it back, which silently discarded every
-			// comment, blank line and the user's ordering.
-			if err := setEnvFileValue(cfg.EnvPath, "MINEOS_CLI_PRERELEASE_UPDATES", value); err != nil {
+			// Update .env in place — the single writer preserves comments and
+			// keeps the file 0600 (godotenv.Write did neither).
+			if err := env.SetValue(cfg.EnvPath, "MINEOS_CLI_PRERELEASE_UPDATES", value); err != nil {
 				return fmt.Errorf("failed to write .env: %w", err)
 			}
 

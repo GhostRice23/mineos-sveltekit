@@ -17,19 +17,24 @@ public class MineOsWebApplicationFactory : WebApplicationFactory<Program>
     private readonly string _dbName = $"TestDb_{Guid.NewGuid():N}";
     private const string TestSigningKey = "test-signing-key-at-least-32-characters-long!!";
 
-    // ServerService creates server/backup/archive directories for real, under
-    // HostOptions.BaseDirectory. Nothing overrode it, so the tests wrote to the
-    // production default (/var/games/minecraft): they only passed on a machine
-    // where that path happened to exist and be writable, and they shared state
-    // with anything else using it. A per-factory temp directory makes them
-    // hermetic and lets them run anywhere, CI included.
-    private readonly string _baseDirectory =
+    /// <summary>
+    /// Every instance gets its own throwaway server root. Without this the tests
+    /// inherit HostOptions' production default of /var/games/minecraft and operate
+    /// on the real host directory: they fail outright where that path is not
+    /// writable, and where it *is* writable they silently create and delete
+    /// servers belonging to whoever is running them.
+    /// </summary>
+    private readonly string _hostRoot =
         Path.Combine(Path.GetTempPath(), $"mineos-tests-{Guid.NewGuid():N}");
+
+    /// <summary>
+    /// Lets integration tests plant real files (jars, configs) into the same
+    /// throwaway server root the API under test operates on.
+    /// </summary>
+    public string HostRoot => _hostRoot;
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
-        Directory.CreateDirectory(_baseDirectory);
-
         builder.UseEnvironment("Testing");
 
         builder.ConfigureAppConfiguration((_, config) =>
@@ -44,7 +49,11 @@ public class MineOsWebApplicationFactory : WebApplicationFactory<Program>
                 ["Auth:Jwt:ExpiresMinutes"] = "60",
                 ["ApiKey:StaticKey"] = "dev-static-api-key-change-me",
                 ["ConnectionStrings:Default"] = "DataSource=:memory:",
-                ["Host:BaseDirectory"] = _baseDirectory,
+                ["Host:BaseDirectory"] = _hostRoot,
+                ["Host:ServersPathSegment"] = "servers",
+                ["Host:ProfilesPathSegment"] = "profiles",
+                ["Host:BackupsPathSegment"] = "backups",
+                ["Host:ImportPathSegment"] = "import",
             });
         });
 
@@ -104,12 +113,16 @@ public class MineOsWebApplicationFactory : WebApplicationFactory<Program>
         base.Dispose(disposing);
 
         if (!disposing)
+        {
             return;
+        }
 
         try
         {
-            if (Directory.Exists(_baseDirectory))
-                Directory.Delete(_baseDirectory, recursive: true);
+            if (Directory.Exists(_hostRoot))
+            {
+                Directory.Delete(_hostRoot, recursive: true);
+            }
         }
         catch (IOException)
         {

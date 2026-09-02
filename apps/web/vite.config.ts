@@ -1,6 +1,12 @@
 import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig, loadEnv, type Plugin } from 'vite';
 import { WebSocketServer, WebSocket } from 'ws';
+// Plain JS helper shared with server.js, which runs as-is in the image and cannot
+// import TypeScript.
+import { closeSafely } from './wsCloseCode.js';
+// The production proxy's same-origin guard, reused so the dev server is not the
+// soft spot. server/ws-proxy.js is plain JS for the same reason wsCloseCode.js is.
+import { isTrustedUpgradeOrigin } from './server/ws-proxy.js';
 
 const allowedHostsEnv = process.env.VITE_ALLOWED_HOSTS ?? '';
 const allowedHosts = allowedHostsEnv
@@ -45,6 +51,28 @@ function wsProxyPlugin(): Plugin {
 
 				if (!shouldProxy(path)) return; // Let Vite handle its own HMR WebSocket
 
+				// Same cross-site WebSocket hijacking guard as the production proxy,
+				// and for the same reason: the handshake below carries the operator's
+				// cookie and forwards it upstream as a Bearer token, so any page a
+				// signed-in developer visits could otherwise open the admin shell as
+				// them. Checked before the cookie is read.
+				if (
+					!isTrustedUpgradeOrigin({
+						origin: req.headers.origin,
+						host: req.headers.host,
+						forwardedHost: req.headers['x-forwarded-host'] as string | undefined,
+						configuredOrigin: allEnv.ORIGIN ?? null
+					})
+				) {
+					console.error(
+						`[WS Proxy Dev] Blocked cross-origin upgrade for ${path}: ` +
+							`Origin="${req.headers.origin ?? ''}" Host="${req.headers.host ?? ''}"`
+					);
+					socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+					socket.destroy();
+					return;
+				}
+
 				const token = parseAuthToken(req.headers.cookie);
 				const targetUrl = `${WS_BASE}${path}${url.search}`;
 
@@ -72,10 +100,12 @@ function wsProxyPlugin(): Plugin {
 								clientWs.send(data, { binary: isBinary });
 							}
 						});
-						clientWs.on('close', (code, reason) => upstream.close(code, reason));
-						upstream.on('close', (code, reason) => clientWs.close(code, reason));
-						clientWs.on('error', () => upstream.close());
-						upstream.on('error', () => clientWs.close());
+						// Same reserved-close-code trap as the production proxy in
+						// server.js; see wsCloseCode.js.
+						clientWs.on('close', (code, reason) => closeSafely(upstream, code, reason));
+						upstream.on('close', (code, reason) => closeSafely(clientWs, code, reason));
+						clientWs.on('error', () => closeSafely(upstream));
+						upstream.on('error', () => closeSafely(clientWs));
 					});
 				});
 

@@ -16,6 +16,27 @@ import (
 	"github.com/freemancraft/mineos-sveltekit/tools/mineos-cli/internal/infrastructure/env"
 )
 
+// ServerActionCmd runs a server action (start/stop/restart/kill) in-process
+// through the API client — the unified boundary for stateful calls; only
+// process orchestration (stack ops, install/reconfigure/uninstall) shells out.
+func (m TuiModel) ServerActionCmd(name, action string) tea.Cmd {
+	client := m.Client
+	ctx := m.Ctx
+	if client == nil || !m.ConfigReady {
+		return func() tea.Msg {
+			return ServerActionDoneMsg{Server: name, Action: action, Err: errors.New("API not connected")}
+		}
+	}
+	return func() tea.Msg {
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		uc := usecases.NewServerActionUseCase(client)
+		err := uc.Execute(ctx, name, action)
+		return ServerActionDoneMsg{Server: name, Action: action, Err: err}
+	}
+}
+
 func (m TuiModel) ConsoleCommandCmd(command string) tea.Cmd {
 	server := m.SelectedServer()
 	if server == "" || !m.ConfigReady {
@@ -29,41 +50,6 @@ func (m TuiModel) ConsoleCommandCmd(command string) tea.Cmd {
 			Message: fmt.Sprintf("sent to %s: %s", server, command),
 			Err:     err,
 		}
-	}
-}
-
-// RunMenuItem executes a menu item by whichever path its kind calls for.
-//
-// One entry point for both execution strategies, so callers no longer decide
-// between them: in-process for anything the API can do, a subprocess only for
-// docker compose orchestration and the genuinely interactive commands.
-func (m TuiModel) RunMenuItem(item MenuItem) tea.Cmd {
-	if item.Kind == MenuKindServerAction {
-		return m.ServerActionCmd(item.Server, item.ServerAct, item.Label)
-	}
-	return m.ExecMenuItem(item)
-}
-
-// ServerActionCmd performs a server action against the API in this process.
-func (m TuiModel) ServerActionCmd(server string, action ServerAction, label string) tea.Cmd {
-	if server == "" {
-		return func() tea.Msg { return ActionResultMsg{Err: errors.New("select a server first")} }
-	}
-	client := m.Client
-	if client == nil || !m.ConfigReady {
-		return func() tea.Msg { return ActionResultMsg{Err: errors.New("API not connected")} }
-	}
-
-	ctx := m.Ctx
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
-	return func() tea.Msg {
-		if err := usecases.NewServerActionUseCase(client).Execute(ctx, server, string(action)); err != nil {
-			return ActionResultMsg{Err: err}
-		}
-		return ActionResultMsg{Message: fmt.Sprintf("%s: %s", label, server)}
 	}
 }
 
@@ -108,17 +94,18 @@ func (m TuiModel) ExecMenuItem(item MenuItem) tea.Cmd {
 }
 
 // StartStreamingCmd starts a command that streams output without requiring stdin
-func (m TuiModel) StartStreamingCmd(exe string, args []string, label string, effect StackEffect) tea.Cmd {
+func (m TuiModel) StartStreamingCmd(exe string, args []string, label string, effect ContainerEffect) tea.Cmd {
 	return func() tea.Msg {
 		cmd := exec.Command(exe, args...)
 
 		// Use combined output (stdout + stderr together)
 		stdoutPipe, err := cmd.StdoutPipe()
 		if err != nil {
+			// The command never ran, so its container effect must not apply.
 			return StreamingStartedMsg{
 				Output: makeErrorChan("Failed to create pipe: " + err.Error()),
 				Label:  label,
-				Effect: effect,
+				Effect: EffectNone,
 			}
 		}
 
@@ -130,7 +117,7 @@ func (m TuiModel) StartStreamingCmd(exe string, args []string, label string, eff
 			return StreamingStartedMsg{
 				Output: makeErrorChan("Failed to start: " + err.Error()),
 				Label:  label,
-				Effect: effect,
+				Effect: EffectNone,
 			}
 		}
 
@@ -220,7 +207,8 @@ func (m TuiModel) SendInteractiveInput(input string) tea.Cmd {
 	}
 }
 
-// ToggleEnvSettingCmd toggles a boolean env var between "true" and "false" in the .env file
+// ToggleEnvSettingCmd toggles a boolean env var between "true" and "false" in
+// the .env file (via the single writer in infrastructure/env).
 func (m TuiModel) ToggleEnvSettingCmd(envKey, currentValue string) tea.Cmd {
 	envPath := m.Cfg.EnvPath
 	newVal := "true"
@@ -228,18 +216,9 @@ func (m TuiModel) ToggleEnvSettingCmd(envKey, currentValue string) tea.Cmd {
 		newVal = "false"
 	}
 	return func() tea.Msg {
-		err := writeEnvValue(envPath, envKey, newVal)
+		err := env.SetValue(envPath, envKey, newVal)
 		return SettingsToggledMsg{Key: envKey, Val: newVal, Err: err}
 	}
-}
-
-// writeEnvValue sets a key=value in the .env file.
-//
-// Delegates to the one .env writer rather than re-implementing it; this used to
-// be a second copy of commands.setEnvFileValue that could disagree with it
-// about quoting and permissions.
-func writeEnvValue(path, key, value string) error {
-	return env.NewDotenvRepository(env.ResolvePath(path)).Set(key, value)
 }
 
 func (m TuiModel) SelectedServer() string {

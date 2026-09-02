@@ -1,77 +1,66 @@
 package tui
 
-import (
-	"fmt"
-	"strings"
-)
+import "strings"
 
-// HelpEntry is one keybinding in the help overlay.
-type HelpEntry struct {
+// helpEntry is one key/description row in the help overlay.
+type helpEntry struct {
 	Keys string
-	What string
+	Desc string
 }
 
-// HelpSection groups related keybindings.
-type HelpSection struct {
+// helpSections lists every TUI keybinding, grouped for the overlay.
+func helpSections() []struct {
 	Title   string
-	Entries []HelpEntry
-}
-
-// HelpSections is the keybinding reference shown by '?'.
-//
-// These bindings previously existed only in input.go's switch statement, so the
-// vim-style navigation was undiscoverable unless you read the source.
-func HelpSections() []HelpSection {
-	return []HelpSection{
-		{
-			Title: "Navigation",
-			Entries: []HelpEntry{
-				{"j / down", "Move down (scroll down in logs)"},
-				{"k / up", "Move up (scroll up in logs)"},
-				{"h / left", "Previous log source"},
-				{"l / right", "Next log source"},
-				{"enter", "Select"},
-				{"esc", "Back"},
-				{"pgup / pgdn", "Page through logs"},
-			},
-		},
-		{
-			Title: "Logs",
-			Entries: []HelpEntry{
-				{"/", "Search logs"},
-				{"n / N", "Next / previous match"},
-				{"g / G", "Jump to top / bottom"},
-				{"r", "Reconnect the log stream"},
-			},
-		},
-		{
-			Title: "Other",
-			Entries: []HelpEntry{
-				{"p", "Toggle pre-release updates (Settings)"},
-				{"?", "Show or hide this help"},
-				{"q", "Quit"},
-			},
-		},
+	Entries []helpEntry
+} {
+	return []struct {
+		Title   string
+		Entries []helpEntry
+	}{
+		{"Navigation", []helpEntry{
+			{"↑/↓, j/k", "Move selection / scroll logs"},
+			{"←/→, h/l", "Switch log source (Service Logs)"},
+			{"Enter", "Select / open server actions"},
+			{"Esc", "Back / close"},
+			{"PgUp/PgDn", "Page through logs"},
+			{"g / G", "Jump to top / bottom of logs"},
+		}},
+		{"Logs", []helpEntry{
+			{"/", "Search logs (Service Logs)"},
+			{"n / N", "Next / previous match"},
+		}},
+		{"Other", []helpEntry{
+			{"p", "Toggle pre-release channel (Settings)"},
+			{"?", "Toggle this help"},
+			{"q, Ctrl+C", "Quit"},
+		}},
 	}
 }
 
-// RenderHelpOverlay renders the keybinding reference.
+// RenderHelpOverlay renders the keybinding reference as a full-pane overlay.
 func (m TuiModel) RenderHelpOverlay(width, height int) []string {
 	lines := make([]string, 0, height)
-	lines = append(lines, StyleHeader.Render(" Keyboard shortcuts"))
-	lines = append(lines, StyleSubtle.Render(strings.Repeat("─", max(0, width))))
+	lines = append(lines, StyleHeader.Render(" KEYBINDINGS "))
+	lines = append(lines, StyleSubtle.Render(strings.Repeat("─", width)))
 
-	for _, section := range HelpSections() {
+	for _, section := range helpSections() {
 		lines = append(lines, "")
-		lines = append(lines, TrimToWidth(StyleStatus.Render(" "+section.Title), width))
-		for _, entry := range section.Entries {
-			row := fmt.Sprintf("   %-14s %s", entry.Keys, entry.What)
-			lines = append(lines, TrimToWidth(row, width))
+		lines = append(lines, StyleHeader.Render(" "+section.Title+" "))
+		for _, e := range section.Entries {
+			lines = append(lines, TrimToWidth("  "+StyleStatus.Render(padKey(e.Keys))+" "+e.Desc, width))
 		}
 	}
 
 	lines = append(lines, "")
-	lines = append(lines, TrimToWidth(StyleSubtle.Render(" Press ? or esc to close"), width))
-
+	lines = append(lines, StyleSubtle.Render("  Press ? or Esc to close."))
 	return PadLines(lines, height)
+}
+
+// padKey left-aligns key labels into a fixed column.
+func padKey(keys string) string {
+	const col = 12
+	if len(keys) >= col {
+		return keys
+	}
+	return keys + strings.Repeat(" ", col-len(keys))
 }

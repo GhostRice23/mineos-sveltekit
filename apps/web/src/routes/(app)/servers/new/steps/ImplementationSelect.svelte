@@ -11,7 +11,7 @@
 		| 'arclight-forge'
 		| 'arclight-neoforge'
 		| 'arclight-fabric';
-	export type ProxyImpl = 'velocity';
+	export type ProxyImpl = 'velocity' | 'bungeecord';
 	export type Implementation = PluginImpl | ModLoader | ProxyImpl;
 
 	interface Props {
@@ -55,6 +55,15 @@
 			iconImage: '',
 			color: '#06b6d4',
 			badge: 'Recommended'
+		},
+		{
+			id: 'bungeecord' as const,
+			name: 'BungeeCord',
+			description:
+				'The original Minecraft proxy by md_5. Stable and widely compatible with older plugins.',
+			icon: '🔀',
+			iconImage: '',
+			color: '#fbbf24'
 		}
 	];
 

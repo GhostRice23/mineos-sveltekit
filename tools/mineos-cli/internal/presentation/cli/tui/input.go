@@ -9,18 +9,19 @@ import (
 
 // HandleKey processes key input in normal mode
 func (m TuiModel) HandleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// The help overlay swallows every key except the ones that dismiss it, so
-	// nothing happens behind it by accident. Ctrl+C still quits — it must work
-	// from anywhere.
-	if m.Mode == ModeHelp {
-		if msg.Type == tea.KeyCtrlC {
+	// While the help overlay is open, any key closes it (except quit keys).
+	if m.ShowHelp {
+		switch msg.String() {
+		case "ctrl+c", "q":
 			m.Quitting = true
 			m.StopLogs()
 			return m, tea.Quit
 		}
-		if msg.Type == tea.KeyEsc || msg.String() == "?" {
-			m.Mode = ModeNormal
-		}
+		m.ShowHelp = false
+		return m, nil
+	}
+	if msg.String() == "?" {
+		m.ShowHelp = true
 		return m, nil
 	}
 
@@ -57,9 +58,6 @@ func (m TuiModel) HandleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Vim-style navigation
 	switch msg.String() {
-	case "?":
-		m.Mode = ModeHelp
-		return m, nil
 	case "q":
 		m.Quitting = true
 		m.StopLogs()
@@ -76,14 +74,6 @@ func (m TuiModel) HandleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Toggle pre-release updates in settings view
 		if m.CurrentView == ViewSettings && m.ConfigReady {
 			return m, m.ToggleEnvSettingCmd("MINEOS_CLI_PRERELEASE_UPDATES", m.Cfg.PreReleaseUpdates)
-		}
-	case "r":
-		// Reconnect the log stream. Automatic reconnects stop after
-		// MaxLogRetries, so there has to be a way to ask for more.
-		if m.CurrentView == ViewServiceLogs || m.CurrentView == ViewServers {
-			m.resetLogStream()
-			m.ErrMsg = ""
-			return m, m.StartLogStreamCmd()
 		}
 	case "/":
 		// Enter search mode in logs views
@@ -134,7 +124,7 @@ func (m TuiModel) navLeft() (tea.Model, tea.Cmd) {
 					prevIdx = len(sources) - 1
 				}
 				m.LogSource = sources[prevIdx]
-				m.resetLogStream()
+				m.Logs = nil
 				m.LogScroll = 0 // Reset scroll when switching sources
 				return m, m.StartLogStreamCmd()
 			}
@@ -152,7 +142,7 @@ func (m TuiModel) navRight() (tea.Model, tea.Cmd) {
 			if svc == m.LogSource {
 				nextIdx := (i + 1) % len(sources)
 				m.LogSource = sources[nextIdx]
-				m.resetLogStream()
+				m.Logs = nil
 				m.LogScroll = 0 // Reset scroll when switching sources
 				return m, m.StartLogStreamCmd()
 			}
@@ -184,7 +174,7 @@ func (m TuiModel) navUp() (tea.Model, tea.Cmd) {
 		m.Selected--
 		// Always show Minecraft logs for selected server
 		m.MinecraftSource = m.SelectedServer()
-		m.resetLogStream()
+		m.Logs = nil
 		return m, m.StartLogStreamCmd()
 	}
 
@@ -220,7 +210,7 @@ func (m TuiModel) navDown() (tea.Model, tea.Cmd) {
 		m.Selected++
 		// Always show Minecraft logs for selected server
 		m.MinecraftSource = m.SelectedServer()
-		m.resetLogStream()
+		m.Logs = nil
 		return m, m.StartLogStreamCmd()
 	}
 
@@ -258,7 +248,7 @@ func (m TuiModel) navSelect() (tea.Model, tea.Cmd) {
 	if m.CurrentView == ViewServers && len(m.Servers) > 0 {
 		m.ServerActions = true
 		m.ActionIndex = 0
-		return m, m.StartPerfStreamCmd()
+		return m, tea.Batch(m.StartPerfStreamCmd(), m.LoadPerfHistoryCmd())
 	}
 
 	if m.NavIndex < 0 || m.NavIndex >= len(m.NavItems) {
@@ -282,13 +272,16 @@ func (m TuiModel) navSelect() (tea.Model, tea.Cmd) {
 			// Switch to Minecraft logs for selected server
 			m.LogType = LogTypeMinecraft
 			m.MinecraftSource = m.SelectedServer()
-			m.resetLogStream()
+			m.Logs = nil
 			cmd = m.StartLogStreamCmd()
 		} else if item.View == ViewServiceLogs {
 			// Switch to Docker logs
 			m.LogType = LogTypeDocker
-			m.resetLogStream()
+			m.Logs = nil
 			cmd = m.StartLogStreamCmd()
+		} else if item.View == ViewHealth {
+			// Fetch immediately; the health tick keeps it fresh afterwards.
+			cmd = m.LoadHealthDataCmd()
 		}
 		return m, cmd
 
@@ -298,7 +291,7 @@ func (m TuiModel) navSelect() (tea.Model, tea.Cmd) {
 		}
 
 		// Handle special actions
-		if item.Action.Kind == MenuKindConsole {
+		if item.Action.Console {
 			if m.SelectedServer() == "" {
 				m.ErrMsg = "Select a server first (go to Servers view)"
 				return m, nil
@@ -335,7 +328,7 @@ func (m TuiModel) executeServerAction() (tea.Model, tea.Cmd) {
 	serverName := m.SelectedServer()
 
 	// Handle back action
-	if action.Action == ServerActionBack {
+	if action.Action == "back" {
 		m.ServerActions = false
 		m.ActionIndex = 0
 		m.stopPerfStream()
@@ -343,32 +336,27 @@ func (m TuiModel) executeServerAction() (tea.Model, tea.Cmd) {
 	}
 
 	// Handle console command
-	if action.Action == ServerActionConsole {
+	if action.Action == "console" {
 		m.Mode = ModeCommand
 		m.Input.SetValue("")
 		m.Input.Focus()
 		return m, textinput.Blink
 	}
 
-	// Handle destructive actions
+	// Destructive server actions confirm first, then run in-process.
 	if action.Destructive {
-		menuItem := &MenuItem{
-			Label:       action.Label,
-			Kind:        MenuKindServerAction,
-			Server:      serverName,
-			ServerAct:   action.Action,
-			Destructive: true,
-		}
-		m.ConfirmAction = menuItem
+		m.ConfirmServerName = serverName
+		m.ConfirmServerAction = action.Action
+		m.ConfirmAction = nil
 		m.ConfirmMessage = "This action may cause data loss. Continue?"
 		m.Mode = ModeConfirm
 		return m, nil
 	}
 
-	// Execute the server action in-process. No view switch: the result lands
-	// on the footer (which expires it) and the table refreshes, instead of
-	// dumping subprocess stdout into an output pane the user has to Esc out of.
-	return m, m.ServerActionCmd(serverName, action.Action, action.Label)
+	// Server actions run in-process through the API — no subprocess, no
+	// output-view detour. The status line and server list reflect the result.
+	m.StatusMsg = action.Label + ": " + serverName + "..."
+	return m, m.ServerActionCmd(serverName, action.Action)
 }
 
 // navBack handles Esc key - goes back to previous view or exits
@@ -429,7 +417,7 @@ func (m TuiModel) executeNavAction(item NavItem) (tea.Model, tea.Cmd) {
 		Interactive: item.Action.Interactive,
 		Streaming:   item.Action.Streaming,
 	}
-	return m, m.RunMenuItem(menuItem)
+	return m, m.ExecMenuItem(menuItem)
 }
 
 // HandleCommandInput handles input when in command mode
@@ -488,55 +476,59 @@ func (m TuiModel) HandleInteractiveInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m TuiModel) HandleConfirmInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyEsc:
-		m.Mode = ModeNormal
-		m.ConfirmAction = nil
-		m.ConfirmMessage = ""
-		return m, nil
-
+		return m.confirmCancel()
 	case tea.KeyEnter:
-		if m.ConfirmAction != nil {
-			action := m.ConfirmAction
-			m.Mode = ModeNormal
-			m.ConfirmAction = nil
-			m.ConfirmMessage = ""
-
-			// Switch to output view for all commands
-			m.PreviousView = m.CurrentView
-			m.CurrentView = ViewOutput
-			m.OutputTitle = action.Label
-			m.OutputLines = []string{"Executing " + action.Label + "..."}
-
-			return m, m.RunMenuItem(*action)
-		}
-		m.Mode = ModeNormal
-		return m, nil
+		return m.confirmAccept()
 	}
 
 	switch msg.String() {
 	case "y", "Y":
-		if m.ConfirmAction != nil {
-			action := m.ConfirmAction
-			m.Mode = ModeNormal
-			m.ConfirmAction = nil
-			m.ConfirmMessage = ""
-
-			// Switch to output view for all commands
-			m.PreviousView = m.CurrentView
-			m.CurrentView = ViewOutput
-			m.OutputTitle = action.Label
-			m.OutputLines = []string{"Executing " + action.Label + "..."}
-
-			return m, m.RunMenuItem(*action)
-		}
-		return m, nil
-
+		return m.confirmAccept()
 	case "n", "N":
-		m.Mode = ModeNormal
-		m.ConfirmAction = nil
-		m.ConfirmMessage = ""
-		return m, nil
+		return m.confirmCancel()
 	}
 
+	return m, nil
+}
+
+// clearConfirm resets all pending-confirmation state.
+func (m *TuiModel) clearConfirm() {
+	m.Mode = ModeNormal
+	m.ConfirmAction = nil
+	m.ConfirmMessage = ""
+	m.ConfirmServerName = ""
+	m.ConfirmServerAction = ""
+}
+
+func (m TuiModel) confirmCancel() (tea.Model, tea.Cmd) {
+	m.clearConfirm()
+	return m, nil
+}
+
+// confirmAccept executes whichever pending action was confirmed: an
+// in-process server action, or a subprocess command shown in the output view.
+func (m TuiModel) confirmAccept() (tea.Model, tea.Cmd) {
+	if m.ConfirmServerAction != "" {
+		name, action := m.ConfirmServerName, m.ConfirmServerAction
+		m.clearConfirm()
+		m.StatusMsg = action + ": " + name + "..."
+		return m, m.ServerActionCmd(name, action)
+	}
+
+	if m.ConfirmAction != nil {
+		action := m.ConfirmAction
+		m.clearConfirm()
+
+		// Switch to output view for subprocess commands
+		m.PreviousView = m.CurrentView
+		m.CurrentView = ViewOutput
+		m.OutputTitle = action.Label
+		m.OutputLines = []string{"Executing " + action.Label + "..."}
+
+		return m, m.ExecMenuItem(*action)
+	}
+
+	m.clearConfirm()
 	return m, nil
 }
 
