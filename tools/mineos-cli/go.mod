@@ -1,6 +1,6 @@
 module github.com/freemancraft/mineos-sveltekit/tools/mineos-cli
 
-go 1.25.12
+go 1.25.13
 
 require (
 	github.com/charmbracelet/bubbles v0.21.0
