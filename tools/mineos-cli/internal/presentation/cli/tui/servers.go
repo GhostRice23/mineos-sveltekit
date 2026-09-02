@@ -2,46 +2,25 @@ package tui
 
 import (
 	"fmt"
-	"math"
 	"strings"
-
-	"github.com/freemancraft/mineos-sveltekit/tools/mineos-cli/internal/infrastructure/api"
-)
-
-// ServerAction identifies a per-server action.
-//
-// A defined string type rather than a bare string: comparisons stay typed and
-// the compiler catches a typo, while the CLI-verb actions still convert
-// straight into argv.
-type ServerAction string
-
-const (
-	ServerActionStart   ServerAction = "start"
-	ServerActionStop    ServerAction = "stop"
-	ServerActionRestart ServerAction = "restart"
-	ServerActionKill    ServerAction = "kill"
-	// ServerActionConsole and ServerActionBack are UI-only — they are handled
-	// in the TUI and never reach the CLI as a verb.
-	ServerActionConsole ServerAction = "console"
-	ServerActionBack    ServerAction = "back"
 )
 
 // ServerActionItem represents an action available for a server
 type ServerActionItem struct {
 	Label       string
-	Action      ServerAction
+	Action      string // start, stop, restart, kill, console
 	Destructive bool
 }
 
 // GetServerActions returns the list of actions available for a server
 func GetServerActions() []ServerActionItem {
 	return []ServerActionItem{
-		{Label: "Start Server", Action: ServerActionStart},
-		{Label: "Stop Server", Action: ServerActionStop},
-		{Label: "Restart Server", Action: ServerActionRestart},
-		{Label: "Kill Server", Action: ServerActionKill, Destructive: true},
-		{Label: "Send Console Command", Action: ServerActionConsole},
-		{Label: "← Back to Server List", Action: ServerActionBack},
+		{Label: "Start Server", Action: "start"},
+		{Label: "Stop Server", Action: "stop"},
+		{Label: "Restart Server", Action: "restart"},
+		{Label: "Kill Server", Action: "kill", Destructive: true},
+		{Label: "Send Console Command", Action: "console"},
+		{Label: "← Back to Server List", Action: "back"},
 	}
 }
 
@@ -62,44 +41,6 @@ func (m TuiModel) RenderServersMain(width, height int) []string {
 	return lines
 }
 
-// ServersTableState is why the server table has no rows. "No servers found."
-// used to be shown for all three, so a still-loading TUI and an unreachable API
-// looked exactly like a working install with nothing on it.
-type ServersTableState int
-
-const (
-	// ServersStateLoading — the first list request has not come back yet.
-	ServersStateLoading ServersTableState = iota
-	// ServersStateUnavailable — the API could not be reached.
-	ServersStateUnavailable
-	// ServersStateEmpty — the API answered, with no servers.
-	ServersStateEmpty
-)
-
-// ServersTableState reports which of the three empty states applies.
-func (m TuiModel) ServersTableState() ServersTableState {
-	switch {
-	case m.ServersLoaded:
-		return ServersStateEmpty
-	case m.ConfigReady && !m.Healthy:
-		return ServersStateUnavailable
-	default:
-		return ServersStateLoading
-	}
-}
-
-// ServersPlaceholder is the line shown in place of the table rows.
-func ServersPlaceholder(state ServersTableState) string {
-	switch state {
-	case ServersStateUnavailable:
-		return "Can't reach the MineOS API - retrying..."
-	case ServersStateEmpty:
-		return "No servers yet. Create one in the web UI."
-	default:
-		return "Loading servers..."
-	}
-}
-
 func (m TuiModel) RenderServersTable(width, height int) []string {
 	lines := make([]string, 0, height)
 
@@ -113,12 +54,21 @@ func (m TuiModel) RenderServersTable(width, height int) []string {
 	}
 
 	if len(m.Servers) == 0 {
-		state := m.ServersTableState()
-		placeholder := " " + ServersPlaceholder(state)
-		if state == ServersStateLoading {
-			placeholder = " " + m.Spinner.View() + ServersPlaceholder(state)
+		// Distinguish loading / unreachable / genuinely empty.
+		var state string
+		switch {
+		case m.ContainersStopped:
+			state = StyleSubtle.Render(" Containers are stopped.")
+		case !m.ConfigReady:
+			state = m.Spinner.View() + StyleSubtle.Render(" Connecting to API...")
+		case m.ErrMsg != "":
+			state = StyleSubtle.Render(" Server list unavailable.")
+		case !m.ServersLoadedOnce:
+			state = m.Spinner.View() + StyleSubtle.Render(" Loading servers...")
+		default:
+			state = StyleSubtle.Render(" No servers found.")
 		}
-		lines = append(lines, TrimToWidth(StyleSubtle.Render(placeholder), width))
+		lines = append(lines, TrimToWidth(" "+state, width))
 		return PadLines(lines, height)
 	}
 
@@ -170,87 +120,55 @@ func formatMemory(b *int64) string {
 	return fmt.Sprintf("%.0fM", mib)
 }
 
-// renderMetricsLines renders the live per-server metrics panel (streamed via SSE)
-// plus sparklines over the recent history.
+// renderMetricsLines renders the live per-server metrics panel (streamed via SSE).
 func (m TuiModel) renderMetricsLines() []string {
 	lines := []string{StyleHeader.Render(" LIVE METRICS ")}
 	p := m.PerfSample
-	if p == nil && len(m.PerfHistory) == 0 {
+	if p == nil {
 		return append(lines, StyleSubtle.Render("  waiting for data…"), "")
 	}
-
-	if p != nil {
-		tps := "—"
-		tpsStyle := StyleRunning
-		if p.Tps != nil {
-			tps = fmt.Sprintf("%.1f", *p.Tps)
-			if *p.Tps < LowTpsThreshold { // matches the server-side alert threshold
-				tpsStyle = StyleError
-			}
+	tps := "—"
+	tpsStyle := StyleRunning
+	if p.Tps != nil {
+		tps = fmt.Sprintf("%.1f", *p.Tps)
+		if *p.Tps < 18 { // low-TPS highlight (matches the server-side alert threshold)
+			tpsStyle = StyleError
 		}
-		lines = append(lines, fmt.Sprintf("  TPS: %s   CPU: %.0f%%   RAM: %d/%d MB   Players: %d",
-			tpsStyle.Render(tps), p.CpuPercent, p.RamUsedMb, p.RamTotalMb, p.PlayerCount))
 	}
-
+	lines = append(lines, fmt.Sprintf("  TPS: %s   CPU: %.0f%%   RAM: %d/%d MB   Players: %d",
+		tpsStyle.Render(tps), p.CpuPercent, p.RamUsedMb, p.RamTotalMb, p.PlayerCount))
 	lines = append(lines, m.renderSparklines()...)
 	return append(lines, "")
 }
 
-// renderSparklines renders one history row per tracked metric.
+// renderSparklines renders TPS and CPU history strips from the sample buffer
+// (history-endpoint backfill + live samples).
 func (m TuiModel) renderSparklines() []string {
 	if len(m.PerfHistory) < 2 {
-		// A single point is a dot, not a trend; say so rather than draw one.
-		if len(m.PerfHistory) > 0 {
-			return []string{StyleSubtle.Render("  history: collecting…")}
-		}
 		return nil
 	}
-
-	tps, cpu, players := perfSeries(m.PerfHistory)
-
-	rows := []string{
-		sparkRow("TPS ", tps, 0, 20, 1, ""),
-		sparkRow("CPU ", cpu, 0, 100, 0, "%"),
-		sparkRow("Plyr", players, 0, math.NaN(), 0, ""),
-	}
-
-	out := make([]string, 0, len(rows))
-	for _, row := range rows {
-		if row != "" {
-			out = append(out, row)
-		}
-	}
-	return out
-}
-
-// sparkRow renders one labelled sparkline with its min/avg/max summary.
-func sparkRow(label string, values []float64, scaleMin, scaleMax float64, decimals int, suffix string) string {
-	stats := Stats(values)
-	if stats.Count == 0 {
-		return ""
-	}
-	spark := Sparkline(values, SparklineWidth, scaleMin, scaleMax)
-	return fmt.Sprintf("  %s %s  %s",
-		StyleSubtle.Render(label),
-		spark,
-		StyleSubtle.Render(FormatSeriesStats(stats, decimals, suffix)))
-}
-
-// perfSeries projects the sample history onto the three plotted series.
-// TPS is omitted for samples that never reported one (a stopped server, or a
-// server without the Spark plugin), so a gap is not drawn as a zero.
-func perfSeries(history []api.PerfSample) (tps, cpu, players []float64) {
-	tps = make([]float64, 0, len(history))
-	cpu = make([]float64, 0, len(history))
-	players = make([]float64, 0, len(history))
-	for _, s := range history {
+	var tpsSeries, cpuSeries []float64
+	for _, s := range m.PerfHistory {
 		if s.Tps != nil {
-			tps = append(tps, *s.Tps)
+			tpsSeries = append(tpsSeries, *s.Tps)
 		}
-		cpu = append(cpu, s.CpuPercent)
-		players = append(players, float64(s.PlayerCount))
+		cpuSeries = append(cpuSeries, s.CpuPercent)
 	}
-	return tps, cpu, players
+
+	var lines []string
+	if len(tpsSeries) >= 2 {
+		lo, avg, hi := SeriesStats(tpsSeries)
+		lines = append(lines, fmt.Sprintf("  TPS %s %s",
+			StyleStatus.Render(Sparkline(tpsSeries, SparklineWidth)),
+			StyleSubtle.Render(fmt.Sprintf("min %.1f  avg %.1f  max %.1f", lo, avg, hi))))
+	}
+	if len(cpuSeries) >= 2 {
+		lo, avg, hi := SeriesStats(cpuSeries)
+		lines = append(lines, fmt.Sprintf("  CPU %s %s",
+			StyleStatus.Render(Sparkline(cpuSeries, SparklineWidth)),
+			StyleSubtle.Render(fmt.Sprintf("min %.0f%%  avg %.0f%%  max %.0f%%  (last %dm)", lo, avg, hi, PerfHistoryMinutes))))
+	}
+	return lines
 }
 
 // RenderMinecraftLogs renders Minecraft server logs for the selected server

@@ -387,11 +387,6 @@ public static class HostEndpoints
             }
         });
 
-        // Java runtimes actually installed on the host, so the server config UI
-        // can offer real choices instead of a hardcoded list of guessed paths.
-        host.MapGet("/java-runtimes", (IJavaRuntimeService javaRuntimeService) =>
-            Results.Ok(javaRuntimeService.Discover()));
-
         host.MapGet("/locales", async (IHostService hostService, CancellationToken cancellationToken) =>
             Results.Ok(await hostService.GetLocalesAsync(cancellationToken)));
 
@@ -400,6 +395,9 @@ public static class HostEndpoints
 
         host.MapGet("/groups", async (IHostService hostService, CancellationToken cancellationToken) =>
             Results.Ok(await hostService.GetGroupsAsync(cancellationToken)));
+
+        host.MapGet("/java-runtimes", async (IHostService hostService, CancellationToken cancellationToken) =>
+            Results.Ok(await hostService.GetJavaRuntimesAsync(cancellationToken)));
 
         return api;
     }

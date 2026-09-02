@@ -21,6 +21,7 @@ const (
 	ViewServiceLogs // Docker container logs
 	ViewSettings
 	ViewOutput // Shows command output
+	ViewHealth // Watchdog + alert roll-up
 )
 
 // TuiMode represents the input mode of the TUI
@@ -32,7 +33,6 @@ const (
 	ModeConfirm
 	ModeInteractive // Running an interactive command inside the TUI
 	ModeSearch      // Searching logs
-	ModeHelp        // Keybinding reference overlay
 )
 
 // LogType represents the type of log being viewed
@@ -62,17 +62,8 @@ type NavItem struct {
 	Destructive bool
 }
 
-// TuiModel is the main model for the TUI application
-type TuiModel struct {
-	LoadConfig *usecases.LoadConfigUseCase
-	Ctx        context.Context
-
-	// Version is the mineos-cli version (usually from the git tag at build time).
-	Version string
-
-	Width  int
-	Height int
-
+// ConnectionState holds API/compose connectivity and configuration.
+type ConnectionState struct {
 	Client *api.Client
 	Cfg    config.Config
 
@@ -83,12 +74,21 @@ type TuiModel struct {
 	ComposeError    string
 	ComposeServices []string
 
-	Servers       []ports.Server
-	Selected      int  // Selected server in servers view
-	ServerActions bool // Whether we're in server actions mode
-	ActionIndex   int  // Selected action in server actions
+	ContainersStopped bool // True when user intentionally stopped containers
+	RetryCount        int  // Config-load retry state
+}
 
-	// Log state
+// ServerListState holds the servers table and its selection.
+type ServerListState struct {
+	Servers           []ports.Server
+	Selected          int  // Selected server in servers view
+	ServerActions     bool // Whether we're in server actions mode
+	ActionIndex       int  // Selected action in server actions
+	ServersLoadedOnce bool // Distinguishes "still loading" from "genuinely empty"
+}
+
+// LogState holds both log subsystems (docker + minecraft) and log-view UI state.
+type LogState struct {
 	Logs            []string
 	LogsActive      bool
 	LogType         LogType
@@ -98,137 +98,136 @@ type TuiModel struct {
 	LogsChan        <-chan string
 	LogErrsChan     <-chan error
 	LogCancel       context.CancelFunc
-	// LogRetries counts consecutive failed reconnects; reset as soon as a line
-	// arrives. Capped at MaxLogRetries so a stream that will never come back
-	// stops being retried forever.
-	LogRetries int
 
-	// Live per-server performance stream (server-actions view)
+	LogScroll      int    // Scroll offset for logs view
+	LogSearchQuery string // Search query for logs
+	LogSearchMode  bool   // Whether in search mode
+	LogRetries     int    // Consecutive clean-close reconnects without data (resets on receipt)
+}
+
+// PerfState holds the live per-server performance stream and its history buffer.
+type PerfState struct {
 	PerfSample *api.PerfSample
 	PerfChan   <-chan api.PerfSample
 	PerfErrs   <-chan error
 	PerfCancel context.CancelFunc
 	PerfServer string
-	// PerfHistory backs the sparklines: seeded from the API's stored history so
-	// the panel opens with context instead of blank, then extended with each
-	// live sample. Oldest first, capped at MaxPerfHistory.
+
+	// Sample history backing the sparkline: history-endpoint backfill plus
+	// live samples appended as they stream in. Cleared with the stream.
 	PerfHistory []api.PerfSample
+}
 
-	LogScroll      int    // Scroll offset for logs view
-	LogSearchQuery string // Search query for logs
-	LogSearchMode  bool   // Whether in search mode
+// HealthState holds the watchdog/crash/alert roll-up for the health view.
+type HealthState struct {
+	Watchdog         map[string]api.WatchdogServerStatus
+	Crashes          []api.CrashEvent
+	Alerts           []api.Notification
+	HealthDataLoaded bool   // First fetch completed (distinguishes loading from empty)
+	HealthDataErr    string // Last fetch error, if any
+}
 
-	StatusMsg string
-	ErrMsg    string
-	// StatusSeq/ErrSeq stamp each notice so its scheduled expiry only fires
-	// while it is still the one on screen — a newer message is never cut short
-	// by an older message's timer.
-	StatusSeq int
-	ErrSeq    int
+// OutputState holds the output view plus streaming/interactive subprocess state.
+type OutputState struct {
+	OutputLines []string
+	OutputTitle string
 
-	// ServersLoaded is true once a server list has come back, so an empty
-	// table can say "none yet" instead of "loading".
-	ServersLoaded bool
+	StreamingOutput  <-chan string
+	StreamingRunning bool
+	StreamingLabel   string
+	StreamingEffect  ContainerEffect
 
-	// FirstLoadDone is set once the initial config load has answered, either
-	// way. It bounds the startup spinner: an API that never comes up must not
-	// leave it spinning (and re-rendering) forever — the servers table reports
-	// that state instead.
-	FirstLoadDone bool
+	InteractiveStdin   io.WriteCloser
+	InteractiveOutput  <-chan string
+	InteractiveRunning bool
+}
 
-	// Navigation
+// NavState holds the sidebar menu and current/previous view.
+type NavState struct {
 	NavItems  []NavItem // Full navigation menu
 	NavIndex  int       // Currently selected nav item
 	NavScroll int       // Scroll offset for nav menu
 
 	CurrentView  TuiView
 	PreviousView TuiView
-
-	// Command output display
-	OutputLines []string
-	OutputTitle string
-
-	Mode     TuiMode
-	Input    textinput.Model
-	Quitting bool
-
-	// Spinner animates while something is in flight. Loading feedback used to
-	// be static text, so a slow API and a hung one looked the same.
-	Spinner spinner.Model
-
-	// Confirmation dialog state
-	ConfirmAction  *MenuItem
-	ConfirmMessage string
-
-	// Interactive command state
-	InteractiveStdin   io.WriteCloser
-	InteractiveOutput  <-chan string
-	InteractiveRunning bool
-
-	// Streaming command state (output-only, no input)
-	StreamingOutput  <-chan string
-	StreamingRunning bool
-	StreamingLabel   string
-	// StreamingEffect is carried from the action to its completion so the
-	// container-state update does not have to guess from the label.
-	StreamingEffect StackEffect
-
-	// Retry state for error recovery
-	RetryCount int
-
-	// Container state tracking
-	ContainersStopped bool // True when user intentionally stopped containers
 }
 
-// MenuKind classifies what selecting a menu item does, so the handler does not
-// have to infer it from argv. `Args[0] == "console"` also panicked on an item
-// with no args at all.
-type MenuKind int
+// DialogState holds modal state: input mode, text input, confirmations, help.
+type DialogState struct {
+	Mode  TuiMode
+	Input textinput.Model
+
+	// ConfirmAction is a pending subprocess command (stack ops);
+	// ConfirmServerName/Action is a pending in-process server action (kill) —
+	// exactly one is set while confirming.
+	ConfirmAction       *MenuItem
+	ConfirmMessage      string
+	ConfirmServerName   string
+	ConfirmServerAction string
+
+	ShowHelp bool // Help overlay visibility (toggled with '?')
+}
+
+// StatusState holds the transient status/error lines and their TTL bookkeeping.
+type StatusState struct {
+	StatusMsg string
+	ErrMsg    string
+
+	// Last status/error seen by the TTL sweep: a message that survives one full
+	// poll interval unchanged is cleared (persistent conditions re-set theirs).
+	StatusSeenAtTick string
+	ErrSeenAtTick    string
+}
+
+// TuiModel is the main model for the TUI application. State is grouped into
+// embedded sub-models per domain; Go field promotion keeps accessors flat
+// (m.Servers, m.CurrentView, ...), while each group can be reasoned about —
+// and reset — as a unit.
+type TuiModel struct {
+	LoadConfig *usecases.LoadConfigUseCase
+	Ctx        context.Context
+
+	// Version is the mineos-cli version (usually from the git tag at build time).
+	Version string
+
+	Width  int
+	Height int
+
+	ConnectionState
+	ServerListState
+	LogState
+	PerfState
+	HealthState
+	OutputState
+	NavState
+	DialogState
+	StatusState
+
+	// Spinner shown while work is in flight (connecting, streaming, interactive)
+	Spinner spinner.Model
+
+	Quitting bool
+}
+
+// ContainerEffect declares how a finished command changed container state,
+// replacing label-substring inference.
+type ContainerEffect int
 
 const (
-	// MenuKindCommand runs `mineos <Args...>` as a subprocess. Kept for the
-	// stack and system actions, which drive docker compose or need a real
-	// terminal (install/reconfigure/uninstall).
-	MenuKindCommand MenuKind = iota
-	// MenuKindConsole opens the console prompt instead of running anything.
-	MenuKindConsole
-	// MenuKindServerAction calls the API in-process. Server start/stop/restart/
-	// kill used to re-execute the mineos binary just to have it call the same
-	// endpoint this process could call directly — which spawned a subprocess
-	// per click, depended on os.Executable() resolving, and turned typed API
-	// errors into scraped stdout.
-	MenuKindServerAction
-)
-
-// StackEffect is what an action does to the containers.
-//
-// Container state used to be inferred from the label text
-// (strings.Contains(label, "Stop")), which quietly tied behaviour to wording:
-// renaming a menu entry, or translating it, would silently stop the TUI
-// noticing that the stack went down.
-type StackEffect int
-
-const (
-	StackEffectNone StackEffect = iota
-	StackEffectStops
-	StackEffectStarts
+	EffectNone ContainerEffect = iota
+	EffectStartsContainers
+	EffectStopsContainers
 )
 
 // MenuItem represents an item in the command menu
 type MenuItem struct {
-	Label  string
-	Args   []string
-	Kind   MenuKind
-	Effect StackEffect
-
-	// Server and ServerAct carry the target of a MenuKindServerAction, so the
-	// confirmation dialog can run it without re-deriving it from Args.
-	Server    string
-	ServerAct ServerAction
-
-	Destructive bool // If true, requires confirmation
-	Interactive bool // If true, requires user input (use tea.ExecProcess)
-	Streaming   bool // If true, stream output in real-time (for long-running commands)
+	Label       string
+	Args        []string
+	Destructive bool            // If true, requires confirmation
+	Interactive bool            // If true, requires user input (use tea.ExecProcess)
+	Streaming   bool            // If true, stream output in real-time (for long-running commands)
+	Console     bool            // If true, opens the console-command prompt instead of executing
+	Effect      ContainerEffect // Container-state change applied when the command succeeds
 }
 
 // Message types for Bubble Tea event handling
@@ -268,15 +267,13 @@ type LogStreamStartedMsg struct {
 	LogSource string
 }
 
-// LogLinesMsg carries every log line that was ready at once, so a burst costs
-// one re-render instead of one per line.
+// LogLinesMsg carries a batch of log lines — all lines available on the
+// channel are drained into one message so a startup burst costs one render.
 type LogLinesMsg struct {
 	Lines []string
 }
 
-// LogStreamClosedMsg is sent when the log stream ends without an error. It is
-// distinct from LogRetryMsg so the reconnect can be delayed and counted; the
-// two used to be the same message, which reconnected with no delay at all.
+// LogStreamClosedMsg signals the log channel closed cleanly (EOF, not error)
 type LogStreamClosedMsg struct{}
 
 // LogErrorMsg is sent when a log streaming error occurs
@@ -287,12 +284,12 @@ type LogErrorMsg struct {
 // LogRetryMsg is sent to trigger log stream retry
 type LogRetryMsg struct{}
 
-// ClearStatusMsg / ClearErrorMsg expire a notice after its TTL. Seq identifies
-// which notice the timer was armed for; a mismatch means it has been replaced
-// and the timer is ignored.
-type ClearStatusMsg struct{ Seq int }
-
-type ClearErrorMsg struct{ Seq int }
+// ServerActionDoneMsg reports an in-process server action (start/stop/restart/kill)
+type ServerActionDoneMsg struct {
+	Server string
+	Action string
+	Err    error
+}
 
 // ActionResultMsg is sent when an action completes
 type ActionResultMsg struct {
@@ -328,7 +325,7 @@ type InteractiveFinishedMsg struct {
 type StreamingStartedMsg struct {
 	Output <-chan string
 	Label  string
-	Effect StackEffect
+	Effect ContainerEffect
 }
 
 // StreamingOutputMsg is sent for each line of streaming command output
@@ -339,7 +336,7 @@ type StreamingOutputMsg struct {
 // StreamingFinishedMsg is sent when a streaming command completes
 type StreamingFinishedMsg struct {
 	Label  string
-	Effect StackEffect
+	Effect ContainerEffect
 	Err    error
 }
 
@@ -359,6 +356,14 @@ type HealthCheckedMsg struct {
 	Err     error
 }
 
+// HealthDataMsg carries the watchdog/crash/alert roll-up for the health view
+type HealthDataMsg struct {
+	Watchdog map[string]api.WatchdogServerStatus
+	Crashes  []api.CrashEvent
+	Alerts   []api.Notification
+	Err      error
+}
+
 // PerfStreamStartedMsg carries the channels for a freshly opened perf stream
 type PerfStreamStartedMsg struct {
 	Server  string
@@ -370,14 +375,12 @@ type PerfStreamStartedMsg struct {
 // PerfSampleMsg carries one live performance sample
 type PerfSampleMsg struct{ Sample api.PerfSample }
 
-// PerfHistoryMsg carries the stored history that seeds the sparklines. Server
-// is checked on arrival so a slow response for a previously selected server
-// cannot land in the panel of the one now on screen.
+// PerfErrorMsg signals the perf stream errored or ended
+type PerfErrorMsg struct{ Err error }
+
+// PerfHistoryMsg carries the history backfill for the metrics sparkline
 type PerfHistoryMsg struct {
 	Server  string
 	Samples []api.PerfSample
 	Err     error
 }
-
-// PerfErrorMsg signals the perf stream errored or ended
-type PerfErrorMsg struct{ Err error }

@@ -22,26 +22,32 @@ func NewTuiModel(loadConfig *usecases.LoadConfigUseCase, ctx context.Context, ve
 	input.CharLimit = 2048
 	input.Width = 50
 
+	spin := spinner.New()
+	spin.Spinner = spinner.MiniDot
+	spin.Style = StyleStatus
+
 	navItems := BuildNavItems()
 
-	spin := spinner.New()
-	spin.Spinner = spinner.Dot
-	spin.Style = StyleSubtle
-
 	return TuiModel{
-		LoadConfig:    loadConfig,
-		Ctx:           ctx,
-		Version:       version,
-		LogsActive:    true,
-		LogType:       LogTypeDocker,
-		LogSource:     DefaultDockerLogSource,
-		MinecraftType: "combined",
-		Mode:          ModeNormal,
-		CurrentView:   ViewDashboard,
-		Input:         input,
-		Spinner:       spin,
-		NavItems:      navItems,
-		NavIndex:      FirstSelectableIndex(navItems),
+		Spinner:    spin,
+		LoadConfig: loadConfig,
+		Ctx:        ctx,
+		Version:    version,
+		LogState: LogState{
+			LogsActive:    true,
+			LogType:       LogTypeDocker,
+			LogSource:     DefaultDockerLogSource,
+			MinecraftType: "combined",
+		},
+		DialogState: DialogState{
+			Mode:  ModeNormal,
+			Input: input,
+		},
+		NavState: NavState{
+			CurrentView: ViewDashboard,
+			NavItems:    navItems,
+			NavIndex:    FirstSelectableIndex(navItems),
+		},
 	}
 }
 
@@ -75,78 +81,16 @@ func (m TuiModel) Init() tea.Cmd {
 	return tea.Batch(m.LoadConfigCmd(), m.LoadComposeCmd(), scheduleHealthPoll(), m.Spinner.Tick)
 }
 
-// Update handles all incoming messages.
-//
-// It wraps the message dispatch so that any handler which sets StatusMsg or
-// ErrMsg automatically gets an expiry armed for it — notices used to stay on
-// the footer forever, so a message about a server you stopped ten minutes ago
-// was still there next to a healthy one.
+// spinnerActive reports whether any work-in-flight state warrants an animated
+// spinner. The spinner's tick loop stops when this goes false and is re-armed
+// by the states that flip it true.
+func (m TuiModel) spinnerActive() bool {
+	return (!m.ConfigReady && !m.ContainersStopped) || m.StreamingRunning || m.InteractiveRunning
+}
+
+// Update handles all incoming messages
 func (m TuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case ClearStatusMsg:
-		if msg.Seq == m.StatusSeq {
-			m.StatusMsg = ""
-		}
-		return m, nil
-	case ClearErrorMsg:
-		if msg.Seq == m.ErrSeq {
-			m.ErrMsg = ""
-		}
-		return m, nil
-	}
-
-	prevStatus, prevErr := m.StatusMsg, m.ErrMsg
-	wasBusy := m.Busy()
-
-	model, cmd := m.dispatch(msg)
-	next, ok := model.(TuiModel)
-	if !ok {
-		return model, cmd
-	}
-
-	cmds := []tea.Cmd{cmd}
-	// Re-arm the spinner whenever work starts. The tick loop stops itself while
-	// idle, so it has to be restarted on the transition rather than run forever.
-	if next.Busy() && !wasBusy {
-		cmds = append(cmds, next.Spinner.Tick)
-	}
-	if next.StatusMsg != prevStatus && next.StatusMsg != "" {
-		next.StatusSeq++
-		cmds = append(cmds, expireNotice(StatusMsgTTL, ClearStatusMsg{Seq: next.StatusSeq}))
-	}
-	if next.ErrMsg != prevErr && next.ErrMsg != "" {
-		next.ErrSeq++
-		cmds = append(cmds, expireNotice(ErrorMsgTTL, ClearErrorMsg{Seq: next.ErrSeq}))
-	}
-	return next, tea.Batch(cmds...)
-}
-
-func expireNotice(after time.Duration, msg tea.Msg) tea.Cmd {
-	return tea.Tick(after, func(time.Time) tea.Msg { return msg })
-}
-
-// Busy reports whether something the user is waiting on is in flight.
-//
-// It drives the spinner, and deliberately excludes "the API is down": that is
-// a steady state the servers table reports in words, not something a spinner
-// should animate (and re-render ten times a second) forever.
-func (m TuiModel) Busy() bool {
-	return m.StreamingRunning || m.InteractiveRunning || !m.FirstLoadDone
-}
-
-// dispatch routes a message to its handler.
-func (m TuiModel) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case spinner.TickMsg:
-		// Keep ticking only while something is actually in flight, so an idle
-		// TUI is not re-rendering several times a second for no reason.
-		if !m.Busy() {
-			return m, nil
-		}
-		var cmd tea.Cmd
-		m.Spinner, cmd = m.Spinner.Update(msg)
-		return m, cmd
-
 	case tea.KeyMsg:
 		if m.Mode == ModeCommand {
 			return m.HandleCommandInput(msg)
@@ -183,17 +127,20 @@ func (m TuiModel) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleLogStreamStarted(msg)
 
 	case LogLinesMsg:
-		m.AppendLogs(msg.Lines)
-		// Lines are arriving, so the stream is healthy again: clear log-related
-		// errors and restore the full reconnect budget.
-		m.LogRetries = 0
+		for _, line := range msg.Lines {
+			m.AppendLog(line)
+		}
+		m.LogRetries = 0 // Receiving data proves the stream works
+		// Clear log-related errors on successful log receipt
 		if strings.Contains(m.ErrMsg, "log stream") || strings.Contains(m.ErrMsg, "stream") {
 			m.ErrMsg = ""
 		}
 		return m, m.ListenLogsCmd()
 
 	case LogStreamClosedMsg:
-		return m.handleLogStreamClosed()
+		// Clean close — reconnect with the same backoff and retry cap as the
+		// error path so a dead source can't spin a tight reconnect loop.
+		return m.scheduleLogRetry(LogRetryDelay)
 
 	case LogErrorMsg:
 		if msg.Err != nil {
@@ -220,11 +167,6 @@ func (m TuiModel) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			// Retry streaming if active and not quitting (with longer delay for connection errors)
 			if m.LogsActive && !m.Quitting && !strings.Contains(errStr, "context canceled") {
-				if m.LogRetries >= MaxLogRetries {
-					m.ErrMsg = logRetriesExhaustedMsg
-					return m, nil
-				}
-				m.LogRetries++
 				// Use longer delay for connection errors to reduce flickering
 				delay := LogRetryDelay
 				if strings.Contains(errStr, "connection refused") || strings.Contains(errStr, "no such host") {
@@ -239,6 +181,15 @@ func (m TuiModel) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case LogRetryMsg:
 		return m, m.StartLogStreamCmd()
+
+	case ServerActionDoneMsg:
+		if msg.Err != nil {
+			m.ErrMsg = msg.Action + " " + msg.Server + ": " + msg.Err.Error()
+		} else {
+			m.StatusMsg = msg.Action + " " + msg.Server + ": done"
+			m.ErrMsg = ""
+		}
+		return m, m.LoadServersCmd()
 
 	case ActionResultMsg:
 		return m.handleActionResult(msg)
@@ -264,7 +215,27 @@ func (m TuiModel) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case StreamingFinishedMsg:
 		return m.handleStreamingFinished(msg)
 
+	case spinner.TickMsg:
+		if !m.spinnerActive() {
+			return m, nil // Stop the tick loop; re-armed when work starts again
+		}
+		var cmd tea.Cmd
+		m.Spinner, cmd = m.Spinner.Update(msg)
+		return m, cmd
+
 	case HealthTickMsg:
+		// TTL sweep: a status/error line that survived one full poll interval
+		// unchanged is stale — clear it. Persistent conditions (API down, bad
+		// key) re-set their message every cycle and therefore survive.
+		if m.StatusMsg != "" && m.StatusMsg == m.StatusSeenAtTick {
+			m.StatusMsg = ""
+		}
+		if m.ErrMsg != "" && m.ErrMsg == m.ErrSeenAtTick {
+			m.ErrMsg = ""
+		}
+		m.StatusSeenAtTick = m.StatusMsg
+		m.ErrSeenAtTick = m.ErrMsg
+
 		// Single self-rescheduling refresh loop (armed once in Init). Always
 		// re-arm so the TUI keeps refreshing while healthy, not only while down.
 		cmds := []tea.Cmd{scheduleHealthPoll()}
@@ -275,15 +246,31 @@ func (m TuiModel) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.ConfigReady {
 			// Live refresh: real health probe + current server list.
 			cmds = append(cmds, m.HealthCheckCmd(), m.LoadServersCmd())
+			if m.CurrentView == ViewHealth {
+				cmds = append(cmds, m.LoadHealthDataCmd())
+			}
 		} else {
-			// API was unreachable — try to reconnect.
+			// API was unreachable — try to reconnect (and keep the spinner alive).
 			m.StatusMsg = "Reconnecting to API..."
-			cmds = append(cmds, m.LoadConfigCmd())
+			m.StatusSeenAtTick = "" // Never TTL-clear the reconnect notice mid-cycle
+			cmds = append(cmds, m.LoadConfigCmd(), m.Spinner.Tick)
 		}
 		return m, tea.Batch(cmds...)
 
 	case HealthCheckedMsg:
 		m.Healthy = msg.Healthy
+		return m, nil
+
+	case HealthDataMsg:
+		if msg.Err != nil {
+			m.HealthDataErr = msg.Err.Error()
+			return m, nil
+		}
+		m.Watchdog = msg.Watchdog
+		m.Crashes = msg.Crashes
+		m.Alerts = msg.Alerts
+		m.HealthDataLoaded = true
+		m.HealthDataErr = ""
 		return m, nil
 
 	case PerfStreamStartedMsg:
@@ -295,27 +282,30 @@ func (m TuiModel) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.PerfErrs = msg.Errs
 		m.PerfCancel = msg.Cancel
 		m.PerfSample = nil
-		m.PerfHistory = nil
-		// Seed the sparklines from stored history in parallel with the stream.
-		return m, tea.Batch(m.ListenPerfCmd(), m.LoadPerfHistoryCmd(msg.Server))
-
-	case PerfHistoryMsg:
-		// Ignore a late response for a server the user has already left.
-		if msg.Err != nil || msg.Server != m.PerfServer {
-			return m, nil
-		}
-		m.PerfHistory = appendPerfSamples(msg.Samples, m.PerfHistory)
-		return m, nil
+		return m, m.ListenPerfCmd()
 
 	case PerfSampleMsg:
 		s := msg.Sample
 		m.PerfSample = &s
-		m.PerfHistory = appendPerfSamples(m.PerfHistory, []api.PerfSample{s})
+		m.PerfHistory = appendCapped(m.PerfHistory, s, MaxPerfHistorySamples)
 		return m, m.ListenPerfCmd()
 
 	case PerfErrorMsg:
 		// Stream ended/errored — clear the panel; it restarts on re-entering the view.
 		m.PerfSample = nil
+		return m, nil
+
+	case PerfHistoryMsg:
+		// Backfill arriving for a stale selection (or failing) is just skipped —
+		// the panel falls back to live samples only.
+		if msg.Err != nil || msg.Server != m.SelectedServer() {
+			return m, nil
+		}
+		// History (older) goes in front of any live samples already collected.
+		m.PerfHistory = append(msg.Samples, m.PerfHistory...)
+		if len(m.PerfHistory) > MaxPerfHistorySamples {
+			m.PerfHistory = m.PerfHistory[len(m.PerfHistory)-MaxPerfHistorySamples:]
+		}
 		return m, nil
 
 	case SettingsToggledMsg:
@@ -355,6 +345,33 @@ func (m TuiModel) HealthCheckCmd() tea.Cmd {
 	return func() tea.Msg {
 		err := client.Health(ctx)
 		return HealthCheckedMsg{Healthy: err == nil, Err: err}
+	}
+}
+
+// LoadHealthDataCmd fetches the watchdog/crash/alert roll-up in one shot.
+func (m TuiModel) LoadHealthDataCmd() tea.Cmd {
+	client := m.Client
+	if client == nil {
+		return nil
+	}
+	ctx := m.Ctx
+	return func() tea.Msg {
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		watchdog, err := client.WatchdogStatus(ctx)
+		if err != nil {
+			return HealthDataMsg{Err: err}
+		}
+		crashes, err := client.WatchdogCrashes(ctx, MaxHealthRows*2)
+		if err != nil {
+			return HealthDataMsg{Err: err}
+		}
+		alerts, err := client.ActiveNotifications(ctx)
+		if err != nil {
+			return HealthDataMsg{Err: err}
+		}
+		return HealthDataMsg{Watchdog: watchdog, Crashes: crashes, Alerts: alerts}
 	}
 }
 
@@ -408,38 +425,33 @@ func (m *TuiModel) stopPerfStream() {
 	m.PerfHistory = nil
 }
 
-// LoadPerfHistoryCmd fetches the stored performance history for a server.
-func (m TuiModel) LoadPerfHistoryCmd(server string) tea.Cmd {
+// LoadPerfHistoryCmd fetches the history backfill for the metrics sparkline.
+func (m TuiModel) LoadPerfHistoryCmd() tea.Cmd {
+	server := m.SelectedServer()
 	client := m.Client
 	if client == nil || server == "" {
 		return nil
 	}
 	ctx := m.Ctx
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	return func() tea.Msg {
+		if ctx == nil {
+			ctx = context.Background()
+		}
 		samples, err := client.PerformanceHistory(ctx, server, PerfHistoryMinutes)
 		return PerfHistoryMsg{Server: server, Samples: samples, Err: err}
 	}
 }
 
-// appendPerfSamples concatenates two oldest-first series and trims the result
-// to MaxPerfHistory, dropping from the front so the newest data survives.
-func appendPerfSamples(older, newer []api.PerfSample) []api.PerfSample {
-	combined := make([]api.PerfSample, 0, len(older)+len(newer))
-	combined = append(combined, older...)
-	combined = append(combined, newer...)
-	if len(combined) > MaxPerfHistory {
-		combined = combined[len(combined)-MaxPerfHistory:]
+// appendCapped appends item keeping at most cap entries (drops the oldest).
+func appendCapped(history []api.PerfSample, s api.PerfSample, capacity int) []api.PerfSample {
+	history = append(history, s)
+	if len(history) > capacity {
+		history = history[len(history)-capacity:]
 	}
-	return combined
+	return history
 }
 
 func (m TuiModel) handleConfigLoaded(msg ConfigLoadedMsg) (tea.Model, tea.Cmd) {
-	// The startup spinner stops once the API has answered either way.
-	m.FirstLoadDone = true
-
 	if msg.Err != nil {
 		m.ErrMsg = msg.Err.Error()
 		// Retry logic with backoff
@@ -506,7 +518,7 @@ func (m TuiModel) handleServersLoaded(msg ServersLoadedMsg) (tea.Model, tea.Cmd)
 		m.ConfigReady = true
 	}
 	m.Servers = msg.Servers
-	m.ServersLoaded = true
+	m.ServersLoadedOnce = true
 	if len(m.Servers) == 0 {
 		m.Selected = 0
 		return m, nil
@@ -541,16 +553,9 @@ func (m TuiModel) handleActionResult(msg ActionResultMsg) (tea.Model, tea.Cmd) {
 	}
 	if msg.Err != nil {
 		m.ErrMsg = msg.Err.Error()
-		return m, nil
-	}
-
-	m.StatusMsg = msg.Message
-	m.ErrMsg = "" // Clear error on success
-
-	// A server action changes the state the table shows; refresh it now rather
-	// than leaving stale rows until the next 10s poll.
-	if m.ConfigReady {
-		return m, m.LoadServersCmd()
+	} else {
+		m.StatusMsg = msg.Message
+		m.ErrMsg = "" // Clear error on success
 	}
 	return m, nil
 }
@@ -583,7 +588,7 @@ func (m TuiModel) handleInteractiveStarted(msg InteractiveStartedMsg) (tea.Model
 	m.InteractiveRunning = true
 	m.Input.SetValue("")
 	m.Input.Focus()
-	return m, tea.Batch(m.ListenInteractiveCmd(), textinput.Blink)
+	return m, tea.Batch(m.ListenInteractiveCmd(), textinput.Blink, m.Spinner.Tick)
 }
 
 func (m TuiModel) handleInteractiveOutput(msg InteractiveOutputMsg) (tea.Model, tea.Cmd) {
@@ -619,50 +624,10 @@ func (m TuiModel) handleInteractiveFinished(msg InteractiveFinishedMsg) (tea.Mod
 
 // AppendLog adds a line to the log buffer with size limiting
 func (m *TuiModel) AppendLog(line string) {
-	m.AppendLogs([]string{line})
-}
-
-// AppendLogs adds a batch of lines to the log buffer, trimming once rather
-// than once per line.
-func (m *TuiModel) AppendLogs(lines []string) {
-	if len(lines) == 0 {
-		return
-	}
-	m.Logs = append(m.Logs, lines...)
+	m.Logs = append(m.Logs, line)
 	if len(m.Logs) > MaxLogLines {
 		m.Logs = m.Logs[len(m.Logs)-MaxLogLines:]
 	}
-}
-
-// resetLogStream clears the buffer and restores the reconnect budget. Called
-// when the user changes what they are watching, so a fresh source always gets
-// a full set of retries even if the previous one had exhausted its own.
-func (m *TuiModel) resetLogStream() {
-	m.Logs = nil
-	m.LogRetries = 0
-}
-
-// logRetriesExhaustedMsg is shown once reconnecting has been given up on.
-const logRetriesExhaustedMsg = "log stream unavailable after 3 attempts - press r to retry"
-
-// handleLogStreamClosed reconnects after a clean close, with a delay and a cap.
-//
-// This path used to return LogRetryMsg immediately, so a stream that closed
-// instantly (a stopped container, a server that never starts) span in a tight
-// reconnect loop; MaxLogRetries and LogRetryDelay existed but were never
-// applied here.
-func (m TuiModel) handleLogStreamClosed() (tea.Model, tea.Cmd) {
-	if !m.LogsActive || m.Quitting || m.ContainersStopped {
-		return m, nil
-	}
-	if m.LogRetries >= MaxLogRetries {
-		m.ErrMsg = logRetriesExhaustedMsg
-		return m, nil
-	}
-	m.LogRetries++
-	return m, tea.Tick(LogRetryDelay, func(time.Time) tea.Msg {
-		return LogRetryMsg{}
-	})
 }
 
 // LoadConfigCmd creates a command to load configuration
@@ -782,7 +747,8 @@ func (m TuiModel) StartLogStreamCmd() tea.Cmd {
 	}
 }
 
-// ListenLogsCmd creates a command to listen for log messages
+// ListenLogsCmd waits for log output, then drains everything already buffered
+// on the channel into a single batch so one burst costs one re-render.
 func (m TuiModel) ListenLogsCmd() tea.Cmd {
 	logsChan := m.LogsChan
 	errsChan := m.LogErrsChan
@@ -797,7 +763,21 @@ func (m TuiModel) ListenLogsCmd() tea.Cmd {
 			if !ok {
 				return LogStreamClosedMsg{}
 			}
-			return LogLinesMsg{Lines: drainLogLines(logsChan, line)}
+			lines := []string{line}
+			for len(lines) < MaxLogBatchLines {
+				select {
+				case next, ok := <-logsChan:
+					if !ok {
+						// Deliver what we have; the re-armed listener sees the
+						// close and triggers the retry path.
+						return LogLinesMsg{Lines: lines}
+					}
+					lines = append(lines, next)
+				default:
+					return LogLinesMsg{Lines: lines}
+				}
+			}
+			return LogLinesMsg{Lines: lines}
 		case err, ok := <-errsChan:
 			if !ok {
 				return LogStreamClosedMsg{}
@@ -807,24 +787,20 @@ func (m TuiModel) ListenLogsCmd() tea.Cmd {
 	}
 }
 
-// drainLogLines collects first plus every line already queued behind it,
-// without blocking. A closed channel just ends the batch — the next listen
-// observes the close and reports it.
-func drainLogLines(ch <-chan string, first string) []string {
-	lines := make([]string, 1, LogBatchMax)
-	lines[0] = first
-	for len(lines) < LogBatchMax {
-		select {
-		case line, ok := <-ch:
-			if !ok {
-				return lines
-			}
-			lines = append(lines, line)
-		default:
-			return lines
-		}
+// scheduleLogRetry re-arms the log stream after a delay, giving up after
+// MaxLogRetries consecutive reconnects that produced no data. Receiving any
+// lines resets the counter; switching views/sources restarts the stream.
+func (m TuiModel) scheduleLogRetry(delay time.Duration) (tea.Model, tea.Cmd) {
+	if m.ContainersStopped || !m.LogsActive || m.Quitting {
+		return m, nil
 	}
-	return lines
+	if m.LogRetries >= MaxLogRetries {
+		return m, nil
+	}
+	m.LogRetries++
+	return m, tea.Tick(delay, func(time.Time) tea.Msg {
+		return LogRetryMsg{}
+	})
 }
 
 // NormalizeComposeServices normalizes the list of compose services
@@ -868,7 +844,7 @@ func (m TuiModel) handleStreamingStarted(msg StreamingStartedMsg) (tea.Model, te
 	m.OutputTitle = msg.Label
 	m.OutputLines = nil // Clear and let streaming populate
 
-	return m, m.ListenStreamingCmd()
+	return m, tea.Batch(m.ListenStreamingCmd(), m.Spinner.Tick)
 }
 
 // handleStreamingOutput handles a line of streaming output
@@ -886,9 +862,6 @@ func (m TuiModel) handleStreamingFinished(msg StreamingFinishedMsg) (tea.Model, 
 	m.StreamingRunning = false
 	m.StreamingOutput = nil
 
-	// The action declares what it does to the containers. This used to be read
-	// out of the label text, so renaming (or translating) a menu entry silently
-	// stopped the TUI noticing the stack had gone down.
 	if msg.Err != nil {
 		m.OutputLines = append(m.OutputLines, "", "Error: "+msg.Err.Error())
 		m.ErrMsg = msg.Err.Error()
@@ -897,14 +870,13 @@ func (m TuiModel) handleStreamingFinished(msg StreamingFinishedMsg) (tea.Model, 
 		m.StatusMsg = msg.Label + " complete"
 		m.ErrMsg = ""
 
-		// Track container state
+		// Track container state from the command's declared effect
 		switch msg.Effect {
-		case StackEffectStops:
+		case EffectStopsContainers:
 			m.ContainersStopped = true
 			m.ConfigReady = false // API is no longer available
 			m.Servers = nil
-			m.ServersLoaded = false
-		case StackEffectStarts:
+		case EffectStartsContainers:
 			m.ContainersStopped = false
 		}
 	}

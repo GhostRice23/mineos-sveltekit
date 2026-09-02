@@ -19,18 +19,24 @@
 		onComplete: () => void;
 	} = $props();
 
+	// 'bedrock' has no entry in serverTypes below, so it is never a target of
+	// selectType; it belongs in the union because currentServerType can be
+	// bedrock, and the guards that refuse a Bedrock/Java swap depend on it.
 	type ServerType =
 		| 'vanilla'
 		| 'paper'
 		| 'spigot'
+		| 'bedrock'
 		| 'forge'
 		| 'neoforge'
 		| 'fabric'
 		| 'quilt'
 		| 'velocity'
+		| 'bungeecord'
 		| 'arclight-forge'
 		| 'arclight-neoforge'
 		| 'arclight-fabric';
+
 
 	const serverTypes: { id: ServerType; name: string; category: string }[] = [
 		{ id: 'vanilla', name: 'Vanilla', category: 'vanilla' },
@@ -41,12 +47,15 @@
 		{ id: 'fabric', name: 'Fabric', category: 'mods' },
 		{ id: 'quilt', name: 'Quilt', category: 'mods' },
 		{ id: 'velocity', name: 'Velocity', category: 'proxy' },
+		{ id: 'bungeecord', name: 'BungeeCord', category: 'proxy' },
 		// Arclight is a hybrid: a mod loader server that also runs Bukkit plugins.
 		// It sits under 'mods' because that is the silo it can be converted within.
 		{ id: 'arclight-forge', name: 'Arclight (Forge + Bukkit)', category: 'mods' },
 		{ id: 'arclight-neoforge', name: 'Arclight (NeoForge + Bukkit)', category: 'mods' },
 		{ id: 'arclight-fabric', name: 'Arclight (Fabric + Bukkit)', category: 'mods' },
 	];
+
+	const proxyTypes = new Set<ServerType>(['velocity', 'bungeecord']);
 
 	// Detect current server category from jar name
 	function detectCategory(jar: string | null, type: string): string {
@@ -96,11 +105,11 @@
 				case 'fabric': return p.group === 'fabric';
 				case 'quilt': return p.group === 'quilt';
 				case 'velocity': return p.group === 'velocity';
+				case 'bungeecord': return p.group === 'bungeecord';
+				case 'bedrock': return p.group === 'bedrock-server' || p.group === 'bedrock-server-preview';
 				case 'arclight-forge': return p.group === 'arclight-forge';
 				case 'arclight-neoforge': return p.group === 'arclight-neoforge';
 				case 'arclight-fabric': return p.group === 'arclight-fabric';
-				// No 'bedrock' case: Bedrock is deliberately absent from
-				// ServerType — selectType() refuses to convert to or from it.
 				default: return false;
 			}
 		});
@@ -305,16 +314,19 @@
 	async function markInstallComplete() {
 		installCompleted = true;
 		// Update the .mineos-server-type file so detection works immediately.
-		// Velocity is recorded as the generic "proxy" marker so all proxy-specific
-		// branches (skip EULA, ping via velocity.toml, send "end" not "stop", etc.)
-		// match — same as a proxy created via the wizard.
+		// All proxy implementations are recorded as the generic "proxy" marker so
+		// proxy-specific branches (skip EULA, ping via velocity.toml/config.yml,
+		// send "end" not "stop") match — same as a proxy created via the wizard.
+		// proxyKind tells the backend which config to bootstrap.
 		if (selectedType) {
-			const markerType = selectedType === 'velocity' ? 'proxy' : selectedType;
+			const isProxy = proxyTypes.has(selectedType);
+			const markerType = isProxy ? 'proxy' : selectedType;
+			const proxyKind = isProxy ? selectedType : undefined;
 			try {
 				await fetch(`/api/servers/${encodeURIComponent(serverName)}/server-type`, {
 					method: 'PUT',
 					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ serverType: markerType })
+					body: JSON.stringify({ serverType: markerType, proxyKind })
 				});
 			} catch { /* best effort */ }
 		}

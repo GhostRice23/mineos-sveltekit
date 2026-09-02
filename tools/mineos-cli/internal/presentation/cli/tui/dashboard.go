@@ -25,7 +25,7 @@ func (m TuiModel) RenderDashboardMain(width, height int) []string {
 	} else if m.Healthy {
 		health = StyleRunning.Render("connected")
 	} else if !m.ConfigReady && m.ErrMsg == "" {
-		health = StyleSubtle.Render(m.Spinner.View() + "connecting...")
+		health = m.Spinner.View() + StyleSubtle.Render(" connecting...")
 	} else {
 		health = StyleError.Render("not connected")
 	}

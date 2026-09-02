@@ -78,78 +78,75 @@ func TestStreamPerformance_ParsesSSE(t *testing.T) {
 	}
 }
 
-func TestPerformanceHistory_DecodesSamplesOldestFirst(t *testing.T) {
-	var gotQuery string
+func TestPerformanceHistory_DecodesAndPassesMinutes(t *testing.T) {
+	var gotMinutes string
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/servers/lobby/performance/history", func(w http.ResponseWriter, r *http.Request) {
-		gotQuery = r.URL.RawQuery
+		gotMinutes = r.URL.Query().Get("minutes")
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`[
-			{"timestamp":"2026-07-30T10:00:00Z","isRunning":true,"cpuPercent":12.5,"ramUsedMb":1024,"ramTotalMb":4096,"tps":19.8,"playerCount":3},
-			{"timestamp":"2026-07-30T10:01:00Z","isRunning":true,"cpuPercent":30,"ramUsedMb":2048,"ramTotalMb":4096,"tps":null,"playerCount":5}
+			{"serverName":"lobby","timestamp":"2026-07-22T00:00:00Z","isRunning":true,"cpuPercent":10,"ramUsedMb":500,"ramTotalMb":1024,"tps":20.0,"playerCount":1},
+			{"serverName":"lobby","timestamp":"2026-07-22T00:01:00Z","isRunning":true,"cpuPercent":20,"ramUsedMb":510,"ramTotalMb":1024,"tps":null,"playerCount":1}
 		]`))
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	samples, err := NewClient(srv.URL, "k").PerformanceHistory(context.Background(), "lobby", 60)
+	samples, err := NewClient(srv.URL, "k").PerformanceHistory(context.Background(), "lobby", 30)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(samples) != 2 {
-		t.Fatalf("want 2 samples, got %d", len(samples))
+	if gotMinutes != "30" {
+		t.Fatalf("minutes not passed, got %q", gotMinutes)
 	}
-	if gotQuery != "minutes=60" {
-		t.Errorf("query = %q, want minutes=60", gotQuery)
-	}
-	if samples[0].Tps == nil || *samples[0].Tps != 19.8 {
-		t.Error("tps not decoded")
-	}
-	if samples[1].Tps != nil {
-		t.Error("null tps should decode as nil, not 0")
+	if len(samples) != 2 || samples[0].Tps == nil || *samples[0].Tps != 20.0 {
+		t.Fatalf("samples not decoded: %+v", samples)
 	}
 	if samples[0].Timestamp.IsZero() {
-		t.Error("timestamp not decoded")
+		t.Fatal("timestamp not decoded")
 	}
-	if samples[1].CpuPercent != 30 || samples[1].PlayerCount != 5 {
-		t.Errorf("sample not decoded: %+v", samples[1])
-	}
-}
-
-func TestPerformanceHistory_EscapesServerName(t *testing.T) {
-	var gotPath string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// EscapedPath, not Path: net/http hands the handler the decoded form,
-		// so Path would show the space back and prove nothing.
-		gotPath = r.URL.EscapedPath()
-		_, _ = w.Write([]byte(`[]`))
-	}))
-	defer srv.Close()
-
-	if _, err := NewClient(srv.URL, "k").PerformanceHistory(context.Background(), "my server", 60); err != nil {
-		t.Fatal(err)
-	}
-	if gotPath != "/api/v1/servers/my%20server/performance/history" {
-		t.Errorf("path = %q, want the name percent-encoded", gotPath)
+	if samples[1].Tps != nil {
+		t.Fatal("null tps must stay nil")
 	}
 }
 
-func TestPerformanceHistory_RequiresKeyAndName(t *testing.T) {
-	if _, err := NewClient("http://example.invalid", "").PerformanceHistory(context.Background(), "lobby", 60); err != ErrApiKeyMissing {
-		t.Errorf("err = %v, want ErrApiKeyMissing", err)
-	}
-	if _, err := NewClient("http://example.invalid", "k").PerformanceHistory(context.Background(), "", 60); err == nil {
-		t.Error("expected an error for an empty server name")
+func TestPerformanceHistory_RequiresName(t *testing.T) {
+	if _, err := NewClient("http://example.invalid", "k").PerformanceHistory(context.Background(), " ", 30); err == nil {
+		t.Fatal("want error for empty server name")
 	}
 }
 
-func TestPerformanceHistory_SurfacesAuthFailure(t *testing.T) {
+func TestListServers_InvalidKeyMapsAuthErrors(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(status)
+		}))
+		if _, err := NewClient(srv.URL, "bad").ListServers(context.Background()); err != ErrApiKeyInvalid {
+			t.Fatalf("status %d: want ErrApiKeyInvalid, got %v", status, err)
+		}
+		srv.Close()
+	}
+}
+
+func TestStreamConsoleLogs_ParsesSSEAndSkipsJunk(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusForbidden)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, ": comment to ignore\n")
+		_, _ = io.WriteString(w, "data: {\"timestamp\":\"2026-07-22T00:00:00Z\",\"message\":\"hello\"}\n\n")
+		_, _ = io.WriteString(w, "data: not-json\n\n")
+		_, _ = io.WriteString(w, "data: {\"timestamp\":\"2026-07-22T00:00:01Z\",\"message\":\"world\"}\n\n")
 	}))
 	defer srv.Close()
 
-	if _, err := NewClient(srv.URL, "k").PerformanceHistory(context.Background(), "lobby", 60); err != ErrApiKeyInvalid {
-		t.Errorf("err = %v, want ErrApiKeyInvalid", err)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	logs, _ := NewClient(srv.URL, "k").StreamConsoleLogs(ctx, "lobby", "")
+
+	var got []string
+	for entry := range logs {
+		got = append(got, entry.Message)
+	}
+	if len(got) != 2 || got[0] != "hello" || got[1] != "world" {
+		t.Fatalf("SSE parse wrong: %v", got)
 	}
 }

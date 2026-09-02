@@ -27,7 +27,7 @@ func (m TuiModel) RenderFooter() string {
 	if m.CurrentView == ViewServiceLogs && len(m.ComposeServices) > 1 {
 		help = " [Up/Down] Navigate  [Left/Right] Switch Service  [?] Help  [q] Quit"
 	}
-	if m.Mode == ModeHelp {
+	if m.ShowHelp {
 		help = " [?/Esc] Close help"
 	}
 
